@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.post("/search", response_model=List[ArticleMetadata])
 async def search_arxiv(payload: SearchRequest):
-    """Przeszukuje arXiv API na podstawie zapytania użytkownika."""
+    """Searches arXiv API based on user query."""
     try:
         client = arxiv.Client()
         search = arxiv.Search(
@@ -45,13 +45,13 @@ async def search_arxiv(payload: SearchRequest):
             )
         return results
     except Exception as e:
-        logger.error(f"Błąd arXiv API: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Błąd arXiv API: {str(e)}")
+        logger.error(f"arXiv API Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"arXiv API Error: {str(e)}")
 
 
 @router.post("/parse-pdf", response_model=ProcessPdfResponse)
 async def parse_pdf(payload: ProcessPdfRequest):
-    """Pobiera plik PDF z arXiv do RAM i wyciąga z niego tekst."""
+    """Downloads PDF from arXiv into RAM and extracts text."""
     try:
         extracted_text = await PDFService.extract_text_from_url(
             pdf_url=payload.pdf_url, 
@@ -66,29 +66,28 @@ async def parse_pdf(payload: ProcessPdfRequest):
             text_preview=extracted_text[:500] + "..."
         )
     except Exception as e:
-        logger.error(f"Błąd przetwarzania PDF: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Błąd przetwarzania PDF: {str(e)}")
+        logger.error(f"PDF Processing Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF Processing Error: {str(e)}")
 
 
-# --- ENDPOINT ANALIZY I STRUMIENIOWANIA (SSE) ---
 @router.post("/analyze-stream")
 async def analyze_and_stream(payload: AnalyzeRequest):
     """
-    Nawiązuje natychmiastowe połączenie SSE i strumieniuje:
-    1. Status pobierania PDF-ów
-    2. Status etapu Map Stage
-    3. Tokeny raportu końcowego z etapu Reduce Stage (Gemini)
+    Streams analysis workflow via SSE:
+    1. Status: Downloading papers
+    2. Status: Map stage (parallel extraction)
+    3. Status/Tokens: Reduce stage (Gemini final synthesis)
     """
     rag_engine = RAGEngine()
 
     async def event_generator():
         try:
-            # Krok 1: Pobieranie tekstów z wybranych artykułów
+            # Step 1: Downloading PDFs
             yield {
                 "event": "status",
                 "data": json.dumps({
                     "step": "downloading", 
-                    "message": f"Pobieranie i ekstrahowanie treści {len(payload.articles)} artykułów..."
+                    "message": f"Downloading and parsing {len(payload.articles)} research paper(s)..."
                 })
             }
 
@@ -101,12 +100,12 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                     "text": text
                 })
 
-            # Krok 2: Map Stage (analiza równoległa z Gemini)
+            # Step 2: Map Stage
             yield {
                 "event": "status",
                 "data": json.dumps({
                     "step": "map", 
-                    "message": "Analizowanie zgromadzonych artykułów (Map Stage)..."
+                    "message": "Analyzing individual papers concurrently (Map Stage)..."
                 })
             }
 
@@ -115,12 +114,12 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 payload.user_instruction
             )
 
-            # Krok 3: Reduce Stage (Generowanie raportu końcowego przez Gemini)
+            # Step 3: Reduce Stage
             yield {
                 "event": "status",
                 "data": json.dumps({
                     "step": "reduce", 
-                    "message": "Generowanie syntezy końcowej przez Gemini..."
+                    "message": "Generating final comparative report with Gemini..."
                 })
             }
 
@@ -130,18 +129,18 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                     "data": json.dumps({"content": token})
                 }
 
-            # Krok 4: Sygnał zakończenia
+            # Step 4: Completion signal
             yield {
                 "event": "complete",
                 "data": json.dumps({"status": "done"})
             }
 
         except Exception as stream_err:
-            logger.error(f"Błąd w trakcie wykonywania potoku SSE: {str(stream_err)}", exc_info=True)
+            logger.error(f"SSE Pipeline Error: {str(stream_err)}", exc_info=True)
             yield {
                 "event": "error",
                 "data": json.dumps({
-                    "message": "Wystąpił błąd podczas przetwarzania.",
+                    "message": "An error occurred during paper processing.",
                     "detail": str(stream_err)
                 })
             }

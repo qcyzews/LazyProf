@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 class RAGEngine:
     def __init__(self):
-        # Inicjalizacja modeli Google Gemini z temperature=0.0 oraz service_tier="flex"
         self.map_llm = ChatGoogleGenerativeAI(
             model=settings.MAP_MODEL,
             google_api_key=settings.GOOGLE_API_KEY,
@@ -28,15 +27,15 @@ class RAGEngine:
         )
 
     async def analyze_single_article(self, text: str, user_instruction: str) -> str:
-        """[MAP STAGE] Analizuje pojedynczy artykuł i wyciąga kluczowe punkty."""
+        """[MAP STAGE] Extracts key findings from a single research paper."""
         system_prompt = (
-            "Jesteś asystentem naukowym w systemie LazyProf. "
-            "Przeanalizuj poniższy tekst artykułu naukowego i wyciągnij wyłącznie informacje "
-            "istotne z punktu widzenia poniższej instrukcji użytkownika.\n"
-            "Odpowiedz zwięźle, w punktach."
+            "You are an expert AI academic research assistant for LazyProf. "
+            "Analyze the provided scientific paper and extract key findings, methodology, "
+            "and insights strictly relevant to the user's instruction.\n"
+            "Be concise and structure your response using bullet points."
         )
 
-        user_prompt = f"Instrukcja użytkownika: {user_instruction}\n\nTekst artykułu:\n{text[:30000]}"
+        user_prompt = f"User Instruction: {user_instruction}\n\nArticle Text:\n{text[:30000]}"
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -52,7 +51,7 @@ class RAGEngine:
                     return content[0].get("text", str(content))
                 return str(content)
             except (ServerError, APIError, Exception) as e:
-                logger.warning(f"[MAP Stage] Błąd API (próba {attempt}/{max_attempts}): {e}")
+                logger.warning(f"[MAP Stage] API Error (attempt {attempt}/{max_attempts}): {e}")
                 if attempt == max_attempts:
                     raise e
                 await asyncio.sleep(2 * attempt)
@@ -62,7 +61,7 @@ class RAGEngine:
         articles_data: List[Dict[str, str]], 
         user_instruction: str
     ) -> List[Dict[str, str]]:
-        """Uruchamia etap MAP równolegle dla wszystkich pobranych artykułów."""
+        """Runs the MAP stage concurrently for all downloaded articles."""
         tasks = [
             self.analyze_single_article(art["text"], user_instruction)
             for art in articles_data
@@ -84,24 +83,24 @@ class RAGEngine:
         map_summaries: List[Dict[str, str]], 
         user_instruction: str
     ) -> AsyncGenerator[str, None]:
-        """[REDUCE STAGE] Generuje raport zbiorczy i strumieniuje go token po tokenie (SSE)."""
+        """[REDUCE STAGE] Synthesizes all extracted information into a comprehensive report in English."""
 
         context_blocks = []
         for item in map_summaries:
             context_blocks.append(
-                f"### Artykuł: {item['title']} (arXiv: {item['arxiv_id']})\n{item['summary']}"
+                f"### Paper: {item['title']} (arXiv: {item['arxiv_id']})\n{item['summary']}"
             )
         full_context = "\n\n---\n\n".join(context_blocks)
 
         system_prompt = (
-            "Jesteś profesorem akademickim w systemie LazyProf. Tworzysz zbiorczą syntezę i raport "
-            "na podstawie wyników przeanalizowanych artykułów naukowych.\n"
-            "Sformatuj odpowiedź czytelnie w języku polskim za pomocą Markdown (nagłówki, tabele, punkty)."
+            "You are a distinguished university professor synthesizing multi-paper literature reviews for LazyProf. "
+            "Synthesize the provided extracted summaries into a structured, comprehensive, and cohesive report.\n"
+            "Format the output strictly in clean Markdown (headings, key takeaways, summary tables, bullet points)."
         )
 
         user_prompt = (
-            f"Oczekiwanie użytkownika: {user_instruction}\n\n"
-            f"Zebrane podsumowania artykułów:\n{full_context}"
+            f"User Objective: {user_instruction}\n\n"
+            f"Extracted Paper Summaries:\n{full_context}"
         )
 
         messages = [
@@ -119,7 +118,6 @@ class RAGEngine:
                     if not content:
                         continue
 
-                    # Warianty sparsowania tokena do czystego str
                     if isinstance(content, str):
                         yield content
                     elif isinstance(content, list) and len(content) > 0:
@@ -136,7 +134,7 @@ class RAGEngine:
                         yield str(content)
                 return
             except (ServerError, APIError, Exception) as e:
-                logger.warning(f"[REDUCE Stage] Błąd API (próba {attempt}/{max_attempts}): {e}")
+                logger.warning(f"[REDUCE Stage] API Error (attempt {attempt}/{max_attempts}): {e}")
                 if attempt == max_attempts:
                     raise e
                 await asyncio.sleep(delay * attempt)
