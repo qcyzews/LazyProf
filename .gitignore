@@ -1,0 +1,26 @@
+# Środowisko wirtualne
+venv/
+.venv/
+env/
+
+# Zmienne środowiskowe (KLUCZE API - BARDZO WAŻNE!)
+.env
+.env.*
+!.env.example
+
+# Python / Pycache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Pliki IDE
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Next.js / Node
+node_modules/
+.next/
+out/
