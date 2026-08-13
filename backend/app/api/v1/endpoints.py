@@ -10,7 +10,8 @@ from app.models.schemas import (
     SearchRequest, 
     ProcessPdfRequest, 
     ProcessPdfResponse,
-    AnalyzeRequest
+    AnalyzeRequest,
+    TranslateRequest
 )
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
@@ -141,6 +142,45 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 "event": "error",
                 "data": json.dumps({
                     "message": "An error occurred during paper processing.",
+                    "detail": str(stream_err)
+                })
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/translate-stream")
+async def translate_and_stream(payload: TranslateRequest):
+    """Streams live Markdown translation of a report into the specified target language."""
+    rag_engine = RAGEngine()
+
+    async def event_generator():
+        try:
+            yield {
+                "event": "status",
+                "data": json.dumps({
+                    "step": "translating", 
+                    "message": f"Translating report into {payload.target_language}..."
+                })
+            }
+
+            async for token in rag_engine.stream_translation(payload.text, payload.target_language):
+                yield {
+                    "event": "token",
+                    "data": json.dumps({"content": token})
+                }
+
+            yield {
+                "event": "complete",
+                "data": json.dumps({"status": "done"})
+            }
+
+        except Exception as stream_err:
+            logger.error(f"Translation SSE Error: {str(stream_err)}", exc_info=True)
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": "An error occurred during translation.",
                     "detail": str(stream_err)
                 })
             }

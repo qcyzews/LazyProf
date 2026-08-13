@@ -138,3 +138,52 @@ class RAGEngine:
                 if attempt == max_attempts:
                     raise e
                 await asyncio.sleep(delay * attempt)
+
+    async def stream_translation(
+        self, 
+        text: str, 
+        target_language: str = "Polish"
+    ) -> AsyncGenerator[str, None]:
+        """Translates a Markdown report into the target language while preserving formatting."""
+        
+        system_prompt = (
+            f"You are a professional academic translator. Translate the following Markdown report into {target_language}.\n"
+            "CRITICAL REQUIREMENTS:\n"
+            "1. Maintain all Markdown formatting (headings, bold text, bullet points, tables) EXACTLY as they appear.\n"
+            "2. Preserve all paper titles, author names, arXiv IDs, equations, and specialized technical terms accurately.\n"
+            "3. Do NOT add any intro, outro, or meta-comments—output ONLY the translated Markdown text."
+        )
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=text)
+        ]
+
+        max_attempts = 3
+        delay = 2.0
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async for chunk in self.reduce_llm.astream(messages):
+                    content = chunk.content
+                    if not content:
+                        continue
+
+                    if isinstance(content, str):
+                        yield content
+                    elif isinstance(content, list) and len(content) > 0:
+                        first = content[0]
+                        if isinstance(first, dict) and "text" in first:
+                            yield first["text"]
+                        else:
+                            yield str(first)
+                    elif isinstance(content, dict) and "text" in content:
+                        yield content["text"]
+                    else:
+                        yield str(content)
+                return
+            except (ServerError, APIError, Exception) as e:
+                logger.warning(f"[TRANSLATION] API Error (attempt {attempt}/{max_attempts}): {e}")
+                if attempt == max_attempts:
+                    raise e
+                await asyncio.sleep(delay * attempt)

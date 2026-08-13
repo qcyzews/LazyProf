@@ -34,3 +34,7 @@ class AnalyzeRequest(BaseModel):
 
 # 2. Wymuszenie jawnego zbudowania schematu Pydantic dla FastAPI
 AnalyzeRequest.model_rebuild()
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_language: str = "Polish"
