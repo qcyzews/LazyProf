@@ -1,9 +1,12 @@
 import json
+import markdown
+from weasyprint import HTML
 import logging
 from typing import List
 import arxiv
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from sse_starlette.sse import EventSourceResponse
+from pydantic import BaseModel
 
 from app.models.schemas import (
     ArticleMetadata, 
@@ -15,6 +18,9 @@ from app.models.schemas import (
 )
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
+
+class PDFExportRequest(BaseModel):
+    markdown_text: str
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -186,3 +192,88 @@ async def translate_and_stream(payload: TranslateRequest):
             }
 
     return EventSourceResponse(event_generator())
+
+@router.post("/export-pdf")
+async def export_pdf(payload: dict):
+    """
+    Converts a Markdown report into a beautifully styled PDF document using WeasyPrint.
+    """
+    md_text = payload.get("markdown", "")
+    if not md_text:
+        raise HTTPException(status_code=400, detail="Markdown content cannot be empty.")
+
+    # Konwersja Markdown do HTML
+    html_content = markdown.markdown(
+        md_text, 
+        extensions=['extra', 'tables', 'fenced_code']
+    )
+
+    # Stylizacja CSS dopasowana do formatu A4
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @page {{
+                size: A4;
+                margin: 20mm 15mm;
+                @bottom-right {{
+                    content: "Page " counter(page) " of " counter(pages);
+                    font-size: 9pt;
+                    color: #64748b;
+                }}
+            }}
+            body {{
+                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                font-size: 10pt;
+                line-height: 1.6;
+                color: #1e293b;
+            }}
+            h1 {{ font-size: 18pt; color: #0f172a; margin-bottom: 12px; border-bottom: 2px solid #6366f1; padding-bottom: 6px; }}
+            h2 {{ font-size: 14pt; color: #1e1b4b; margin-top: 18px; margin-bottom: 8px; border-left: 4px solid #6366f1; padding-left: 8px; }}
+            h3 {{ font-size: 11pt; color: #334155; margin-top: 14px; margin-bottom: 6px; }}
+            p {{ margin-bottom: 10px; text-align: justify; }}
+            ul, ol {{ margin-bottom: 10px; padding-left: 20px; }}
+            li {{ margin-bottom: 4px; }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 14px 0;
+                font-size: 9pt;
+            }}
+            th, td {{
+                border: 1px solid #cbd5e1;
+                padding: 6px 10px;
+                text-align: left;
+            }}
+            th {{
+                background-color: #f1f5f9;
+                font-weight: bold;
+                color: #0f172a;
+            }}
+            tr:nth-child(even) {{
+                background-color: #f8fafc;
+            }}
+            code {{
+                font-family: 'Courier New', Courier, monospace;
+                background-color: #f1f5f9;
+                padding: 2px 4px;
+                font-size: 8.5pt;
+                border-radius: 3px;
+            }}
+        </style>
+    </head>
+    <body>
+        {html_content}
+    </body>
+    </html>
+    """
+
+    pdf_bytes = HTML(string=full_html).write_pdf()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=LazyProf_Report.pdf"}
+    )
