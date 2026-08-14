@@ -1,3 +1,4 @@
+# /backend/app/api/v1/endpoints.py
 import json
 import logging
 import markdown
@@ -21,6 +22,8 @@ from app.models.schemas import (
 )
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
+from app.services.quota_service import quota_service
+from app.models.schemas import StatusResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -332,3 +335,12 @@ async def test_grounded_analysis(request: MultiPaperGroundedRequest):
     except Exception as e:
         logger.error(f"LangGraph Processing Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Błąd przetwarzania LangGraph: {str(e)}")
+
+@router.get("/status", response_model=StatusResponse)                               # <-- 2. Nowy endpoint
+async def get_system_status():
+    """Zwraca status systemu oraz dostępność trybów prędkości na podstawie RPD."""
+    modes_status = await quota_service.get_available_modes_status()
+    return {
+        "status": "ok",
+        "modes": modes_status
+    }

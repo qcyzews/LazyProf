@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class SearchRequest(BaseModel):
-    query: str = Field(..., example="Retrieval Augmented Generation")
+    query: str = Field(..., json_schema_extra={"example": "Retrieval Augmented Generation"})
     max_results: int = Field(default=5, ge=1, le=20)
 
 class ArticleMetadata(BaseModel):
@@ -38,3 +38,13 @@ AnalyzeRequest.model_rebuild()
 class TranslateRequest(BaseModel):
     text: str
     target_language: str = "Polish"
+
+class ModeStatus(BaseModel):
+    available: bool
+    model_name: str
+    remaining_rpd: int = Field(ge=0)
+    max_rpd: int = Field(gt=0)
+
+class StatusResponse(BaseModel):
+    status: str = "ok"
+    modes: Dict[str, ModeStatus]

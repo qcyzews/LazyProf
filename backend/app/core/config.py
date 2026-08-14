@@ -1,18 +1,74 @@
 import os
+from typing import Dict, Any, Literal
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "LazyProf Backend"
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    
+
+        
     # Modele Google Gemini
     MAP_MODEL: str = "gemini-3.1-flash-lite"  # Szybki i ultrawydajny model do etapu MAP
     REDUCE_MODEL: str = "gemini-3.5-flash"  # Zaawansowany model do głębokiej syntezy w REDUCE
 
-    class Config:
-        env_file = ".env"
+    # Wybór backendu dla limitów: "in_memory" (lokalnie) lub "redis" (chmura)
+    QUOTA_BACKEND: Literal["in_memory", "redis"] = "in_memory"
+    REDIS_URL: str = "redis://localhost:6379/0"
 
+    # --- DEFINICJA LIMITÓW API (RPM, TPM, RPD) ---
+    # Limity bezterminowe/darmowe pobrane z Google AI Studio
+    MODEL_LIMITS: Dict[str, Dict[str, int]] = {
+        "gemini-3.1-flash-lite": {
+            "rpm": 15,          # Requests Per Minute
+            "tpm": 250_000,     # Tokens Per Minute
+            "rpd": 500,         # Requests Per Day
+        },
+        "gemini-2.5-flash": {
+            "rpm": 5,
+            "tpm": 250_000,
+            "rpd": 20,
+        },
+        "gemini-3.5-flash": {
+            "rpm": 5,
+            "tpm": 250_000,
+            "rpd": 20,
+        }
+    }
+
+    # Configuration for Speed Modes (Fast, Medium, High)
+    SPEED_MODES: Dict[str, Dict[str, Any]] = {
+        "fast": {
+            "model_name": "gemini-3.1-flash-lite",  # Zmień na gemini-3.1-flash-lite gdy będzie dostępny
+            "context_mode": "smart_chunks",     # Wyciąganie dedykowanych fragmentów
+            "thinking_level": "low",
+            "service_tier": "flex",
+        },
+        "medium": {
+            "model_name": "gemini-3.1-flash-lite",  # Zmień na gemini-3.1-flash-lite gdy będzie dostępny
+            "context_mode": "smart_chunks",     # Wyciąganie dedykowanych fragmentów
+            "thinking_level": "medium",
+            "service_tier": "flex",
+        },
+        "high": {
+            "model_name": "gemini-3.5-flash",  # Zmień na gemini-3.5-flash gdy będzie dostępny
+            "context_mode": "full_paper",       # Pełny tekst artykułów
+            "thinking_level": "high",
+            "service_tier": "flex",
+        }
+    }
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"
+    )
+
+#    class Config:
+#        env_file = ".env"
+#        extra = "ignore"
+        
 settings = Settings()

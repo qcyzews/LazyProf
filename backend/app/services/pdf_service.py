@@ -1,3 +1,4 @@
+# /backend/app/services/pdf_service.py
 import fitz  # PyMuPDF
 import io
 import re
@@ -40,7 +41,6 @@ class PDFService:
                     
         return "\n\n".join(full_text)
 
-    @staticmethod
     @staticmethod
     async def extract_pages_from_url(pdf_url: str, max_pages: int = 25) -> list[dict]:
         """
