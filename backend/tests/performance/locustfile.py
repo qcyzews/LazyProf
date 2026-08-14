@@ -1,30 +1,28 @@
 # backend/tests/performance/locustfile.py
-from locust import HttpUser, task, between, events
-import random
+from locust import HttpUser, task, between
 
 class APIUser(HttpUser):
-    # Czas oczekiwania użytkownika między zapytaniami (od 1 do 3 sekund)
     wait_time = between(1, 3)
 
     @task(3)
     def test_health_check(self):
-        """Testuje prosty punkt końcowy (np. status API)."""
         self.client.get("/health")
 
     @task(2)
-    def test_get_modes_status(self):
-        """Testuje pobieranie statusu limitów/trybów (odpytuje QuotaService)."""
-        self.client.get("/api/v1/modes-status")
-
-    @task(1)
-    def test_pdf_extraction_mock(self):
-        """
-        Przykładowe zapytanie do serwisu PDF.
-        Używamy przykładowego ID arXiv.
-        """
+    def test_search_arxiv(self):
         headers = {"Content-Type": "application/json"}
         payload = {
-            "arxiv_id": "1706.03762",
+            "query": "Quantum Computing",
+            "max_results": 5
+        }
+        self.client.post("/api/v1/search", json=payload, headers=headers)
+
+    @task(1)
+    def test_parse_pdf(self):
+        headers = {"Content-Type": "application/json"}
+        # Przekazujemy PEŁNY URL do PDF-a
+        payload = {
+            "pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
             "max_pages": 5
         }
-        self.client.post("/api/v1/extract-pdf", json=payload, headers=headers)
+        self.client.post("/api/v1/parse-pdf", json=payload, headers=headers)
