@@ -1,12 +1,15 @@
 import json
-import markdown
-from weasyprint import HTML
 import logging
-from typing import List
+import markdown
+from typing import List, Optional
 import arxiv
 from fastapi import APIRouter, HTTPException, Response
 from sse_starlette.sse import EventSourceResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from weasyprint import HTML
+
+# Import nowego grafu obsługującego 1 lub wiele prac
+from app.graph.workflow import multi_paper_graph
 
 from app.models.schemas import (
     ArticleMetadata, 
@@ -19,12 +22,32 @@ from app.models.schemas import (
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
 
-class PDFExportRequest(BaseModel):
-    markdown_text: str
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# --- SCHEMAS DLA WERYFIKACJI UGRUNTOWANEJ (LANGGRAPH) ---
+
+class MultiPaperGroundedRequest(BaseModel):
+    arxiv_ids: List[str] = Field(
+        ..., 
+        example=["1706.03762", "2106.09685"], 
+        description="Lista identyfikatorów arXiv do analizy"
+    )
+    user_instruction: str = Field(
+        ..., 
+        example="Porównaj architekturę i wyniki opisane w artykułach.",
+        description="Zapytanie lub instrukcja dla agenta"
+    )
+
+class MultiPaperGroundedResponse(BaseModel):
+    arxiv_ids: List[str]
+    total_attempts: int
+    is_valid: bool
+    analysis_markdown: str
+    audit_trail: Optional[List[dict]] = []
+
+
+# --- ENDPOINTY ZAPYTAN I EKSTRAKCJI ---
 
 @router.post("/search", response_model=List[ArticleMetadata])
 async def search_arxiv(payload: SearchRequest):
@@ -77,6 +100,8 @@ async def parse_pdf(payload: ProcessPdfRequest):
         raise HTTPException(status_code=500, detail=f"PDF Processing Error: {str(e)}")
 
 
+# --- ENDPOINTY STRUMIENIOWE (SSE) ---
+
 @router.post("/analyze-stream")
 async def analyze_and_stream(payload: AnalyzeRequest):
     """
@@ -89,7 +114,6 @@ async def analyze_and_stream(payload: AnalyzeRequest):
 
     async def event_generator():
         try:
-            # Step 1: Downloading PDFs
             yield {
                 "event": "status",
                 "data": json.dumps({
@@ -107,7 +131,6 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                     "text": text
                 })
 
-            # Step 2: Map Stage
             yield {
                 "event": "status",
                 "data": json.dumps({
@@ -121,7 +144,6 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 payload.user_instruction
             )
 
-            # Step 3: Reduce Stage
             yield {
                 "event": "status",
                 "data": json.dumps({
@@ -136,7 +158,6 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                     "data": json.dumps({"content": token})
                 }
 
-            # Step 4: Completion signal
             yield {
                 "event": "complete",
                 "data": json.dumps({"status": "done"})
@@ -193,22 +214,21 @@ async def translate_and_stream(payload: TranslateRequest):
 
     return EventSourceResponse(event_generator())
 
+
+# --- EXPORT DO PDF ---
+
 @router.post("/export-pdf")
 async def export_pdf(payload: dict):
-    """
-    Converts a Markdown report into a beautifully styled PDF document using WeasyPrint.
-    """
+    """Converts a Markdown report into a beautifully styled PDF document using WeasyPrint."""
     md_text = payload.get("markdown", "")
     if not md_text:
         raise HTTPException(status_code=400, detail="Markdown content cannot be empty.")
 
-    # Konwersja Markdown do HTML
     html_content = markdown.markdown(
         md_text, 
         extensions=['extra', 'tables', 'fenced_code']
     )
 
-    # Stylizacja CSS dopasowana do formatu A4
     full_html = f"""
     <!DOCTYPE html>
     <html>
@@ -277,3 +297,38 @@ async def export_pdf(payload: dict):
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=LazyProf_Report.pdf"}
     )
+
+
+# --- LANGGRAPH GROUNDED AGENT (1 LUB WIELE PRAC) ---
+
+@router.post("/test-grounded-analysis", response_model=MultiPaperGroundedResponse)
+async def test_grounded_analysis(request: MultiPaperGroundedRequest):
+    """
+    Uruchamia ugruntowaną weryfikację LangGraph z pętlą self-correction
+    dla 1 lub wielu artykułów z arXiv.
+    """
+    try:
+        initial_state = {
+            "arxiv_ids": request.arxiv_ids,
+            "user_instruction": request.user_instruction,
+            "papers_data": {},
+            "papers_metadata": {},
+            "analysis_markdown": "",
+            "verification_errors": [],
+            "retry_count": 0,
+            "is_valid": False,
+            "audit_trail": []
+        }
+        
+        final_state = await multi_paper_graph.ainvoke(initial_state)
+
+        return MultiPaperGroundedResponse(
+            arxiv_ids=final_state["arxiv_ids"],
+            total_attempts=final_state.get("retry_count", 0),
+            is_valid=final_state.get("is_valid", False),
+            analysis_markdown=final_state["analysis_markdown"],
+            audit_trail=final_state.get("audit_trail", [])
+        )
+    except Exception as e:
+        logger.error(f"LangGraph Processing Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Błąd przetwarzania LangGraph: {str(e)}")
