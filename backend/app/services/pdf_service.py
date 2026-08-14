@@ -79,6 +79,9 @@ class PDFService:
 
             return pages_data
 
+        except HTTPException:
+            # Przepuszczamy Intencjonalne HTTPException (np. status 400 powyżej)
+            raise
         except httpx.HTTPError as e:
             logger.error(f"Błąd HTTP podczas pobierania PDF z {clean_url}: {e}")
             raise HTTPException(status_code=500, detail=f"Błąd pobierania pliku PDF: {str(e)}")

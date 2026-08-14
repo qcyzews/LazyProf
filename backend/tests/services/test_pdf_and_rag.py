@@ -4,96 +4,168 @@ from unittest.mock import MagicMock, patch
 import httpx
 from fastapi import HTTPException
 
-from app.services.pdf_service import PDFService
-
-
-async def _extract_pdf(url: str):
-    """Pomocnicze bezpieczne wywołanie metody ekstrakcji tekstu z PDFService."""
-    service = PDFService() if isinstance(PDFService, type) else PDFService
-    
-    for method_name in [
-        "download_and_extract_text",
-        "download_and_extract",
-        "extract_text_from_url",
-        "get_pdf_text",
-        "process_pdf",
-    ]:
-        if hasattr(service, method_name):
-            method = getattr(service, method_name)
-            return await method(url)
-            
-    raise AttributeError("PDFService nie posiada rozpoznanej metody ekstrakcji tekstu PDF.")
+from app.services.pdf_service import PDFService, clean_arxiv_id
 
 
 # ============================================================================
-# TESTY: PDFService
+# TESTY: clean_arxiv_id
+# ============================================================================
+
+def test_clean_arxiv_id_regex_matches():
+    """Testuje dopasowania regex dla standardowych formatów arXiv ID."""
+    assert clean_arxiv_id("1706.03762") == "1706.03762"
+    assert clean_arxiv_id("1706.03762v2") == "1706.03762v2"
+    assert clean_arxiv_id("math-ph/0103001") == "math-ph/0103001"
+    assert clean_arxiv_id("https://arxiv.org/abs/1706.03762") == "1706.03762"
+
+
+def test_clean_arxiv_id_fallback_parsing():
+    """Testuje zapasowe czyszczenie dla ścieżek i nazw plików niemających standardowego ID."""
+    assert clean_arxiv_id("https://example.com/custom_paper.pdf") == "custom_paper"
+    assert clean_arxiv_id(" [custom_file.pdf] ") == "custom_file"
+
+
+# ============================================================================
+# TESTY: PDFService.extract_text_from_url
 # ============================================================================
 
 @pytest.mark.asyncio
 @patch("app.services.pdf_service.httpx.AsyncClient.get")
-async def test_pdf_service_http_error(mock_httpx_get):
-    """Testuje obsługę błędu sieciowego/HTTP przy pobieraniu PDF."""
-    mock_httpx_get.side_effect = httpx.HTTPError("Network failure")
-
-    with pytest.raises((HTTPException, httpx.HTTPError)):
-        await _extract_pdf("https://arxiv.org/pdf/invalid.pdf")
-
-
-@pytest.mark.asyncio
-@patch("app.services.pdf_service.httpx.AsyncClient.get")
 @patch("app.services.pdf_service.fitz.open")
-async def test_pdf_service_empty_text_extracted(mock_fitz_open, mock_httpx_get):
-    """Testuje przypadek, gdy pobrany PDF nie zawiera tekstu."""
-    mock_httpx_get.return_value = MagicMock(status_code=200, content=b"%PDF mock")
+async def test_extract_text_from_url_success(mock_fitz_open, mock_httpx_get):
+    """Testuje udane wyciąganie tekstu ze stron z pominięciem pustych stron."""
+    mock_httpx_get.return_value = MagicMock(
+        status_code=200, 
+        content=b"%PDF mock", 
+        raise_for_status=MagicMock()
+    )
 
-    mock_doc = MagicMock()
-    mock_page = MagicMock()
-    mock_page.get_text.return_value = "   "  # Pusta strona
-    mock_doc.__len__.return_value = 1
-    mock_doc.load_page.return_value = mock_page
-    mock_doc.__getitem__.return_value = mock_page
-    mock_doc.__iter__.return_value = iter([mock_page])
-    mock_fitz_open.return_value.__enter__.return_value = mock_doc
+    page1 = MagicMock()
+    page1.get_text.return_value = "Wstęp do artykułu."
+    page2 = MagicMock()
+    page2.get_text.return_value = "   "  # Pusta strona do pominięcia
+    page3 = MagicMock()
+    page3.get_text.return_value = "Wnioski końcowe."
 
-    try:
-        res = await _extract_pdf("https://arxiv.org/pdf/empty.pdf")
-        assert res.strip() == ""
-    except HTTPException as exc_info:
-        assert exc_info.status_code in (422, 400, 500)
-
-
-@pytest.mark.asyncio
-@patch("app.services.pdf_service.httpx.AsyncClient.get")
-@patch("app.services.pdf_service.fitz.open")
-async def test_pdf_service_fitz_exception(mock_fitz_open, mock_httpx_get):
-    """Testuje błąd parsowania uszkodzonego pliku PDF przez PyMuPDF (fitz)."""
-    mock_httpx_get.return_value = MagicMock(status_code=200, content=b"corrupted bytes")
-    mock_fitz_open.side_effect = Exception("Corrupted PDF file")
-
-    with pytest.raises((HTTPException, Exception)):
-        await _extract_pdf("https://arxiv.org/pdf/corrupt.pdf")
-
-
-@pytest.mark.asyncio
-@patch("app.services.pdf_service.httpx.AsyncClient.get")
-@patch("app.services.pdf_service.fitz.open")
-async def test_pdf_service_success_extraction(mock_fitz_open, mock_httpx_get):
-    """Testuje udaną ekstrakcję tekstu z wielostronicowego PDF przy użyciu fitz."""
-    mock_httpx_get.return_value = MagicMock(status_code=200, content=b"%PDF-1.4 mock")
-
-    mock_page1 = MagicMock()
-    mock_page1.get_text.return_value = "Treść strony pierwszej.\n"
-    mock_page2 = MagicMock()
-    mock_page2.get_text.return_value = "Treść strony drugiej."
-
-    pages = [mock_page1, mock_page2]
+    pages = [page1, page2, page3]
     mock_doc = MagicMock()
     mock_doc.__len__.return_value = len(pages)
     mock_doc.load_page.side_effect = lambda i: pages[i]
-    mock_doc.__getitem__.side_effect = lambda i: pages[i]
-    mock_doc.__iter__.return_value = iter(pages)
     mock_fitz_open.return_value.__enter__.return_value = mock_doc
 
-    res = await _extract_pdf("https://arxiv.org/pdf/valid.pdf")
-    assert "Treść strony pierwszej" in res
-    assert "Treść strony drugiej" in res
+    result = await PDFService.extract_text_from_url("https://arxiv.org/pdf/1706.03762.pdf", max_pages=15)
+
+    assert "--- STRONA 1 ---" in result
+    assert "Wstęp do artykułu." in result
+    assert "STRONA 2" not in result  # Pusta strona pominięta
+    assert "--- STRONA 3 ---" in result
+    assert "Wnioski końcowe." in result
+
+
+# ============================================================================
+# TESTY: PDFService.extract_pages_from_url
+# ============================================================================
+
+@pytest.mark.asyncio
+@patch("app.services.pdf_service.httpx.AsyncClient.get")
+@patch("app.services.pdf_service.fitz.open")
+async def test_extract_pages_from_url_success(mock_fitz_open, mock_httpx_get):
+    """Testuje zwracanie ustrukturyzowanej listy stron."""
+    mock_httpx_get.return_value = MagicMock(
+        status_code=200, 
+        content=b"%PDF mock", 
+        raise_for_status=MagicMock()
+    )
+
+    page1 = MagicMock()
+    page1.get_text.return_value = "Treść strony 1"
+    
+    pages = [page1]
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = len(pages)
+    mock_doc.load_page.side_effect = lambda i: pages[i]
+    mock_fitz_open.return_value.__enter__.return_value = mock_doc
+
+    pages_data = await PDFService.extract_pages_from_url("1706.03762")
+
+    assert len(pages_data) == 1
+    assert pages_data[0] == {"page": 1, "text": "Treść strony 1"}
+
+
+@pytest.mark.asyncio
+@patch("app.services.pdf_service.httpx.AsyncClient.get")
+@patch("app.services.pdf_service.fitz.open")
+async def test_extract_pages_from_url_empty_pdf_raises_400(mock_fitz_open, mock_httpx_get):
+    """Testuje rzucenie HTTPException 400 gdy z PDF nie wyekstrahowano żadnego tekstu."""
+    mock_httpx_get.return_value = MagicMock(
+        status_code=200, 
+        content=b"%PDF mock", 
+        raise_for_status=MagicMock()
+    )
+
+    mock_page = MagicMock()
+    mock_page.get_text.return_value = "\n  \n"  # Sam biały znak
+    
+    mock_doc = MagicMock()
+    mock_doc.__len__.return_value = 1
+    mock_doc.load_page.return_value = mock_page
+    mock_fitz_open.return_value.__enter__.return_value = mock_doc
+
+    with pytest.raises(HTTPException) as exc_info:
+        await PDFService.extract_pages_from_url("1706.03762")
+    
+    assert exc_info.value.status_code == 400
+    assert "Nie udało się wyekstrahować tekstu" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@patch("app.services.pdf_service.httpx.AsyncClient.get")
+async def test_extract_pages_from_url_httpx_error(mock_httpx_get):
+    """Testuje obsługę błędu sieciowego httpx.HTTPError."""
+    mock_httpx_get.side_effect = httpx.HTTPError("Błąd połączenia HTTP")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await PDFService.extract_pages_from_url("1706.03762")
+
+    assert exc_info.value.status_code == 500
+    assert "Błąd pobierania pliku PDF" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@patch("app.services.pdf_service.httpx.AsyncClient.get")
+@patch("app.services.pdf_service.fitz.open")
+async def test_extract_pages_from_url_generic_exception(mock_fitz_open, mock_httpx_get):
+    """Testuje obsługę niespodziewanego wyjątku (np. uszkodzony plik PDF)."""
+    mock_httpx_get.return_value = MagicMock(
+        status_code=200, 
+        content=b"corrupted", 
+        raise_for_status=MagicMock()
+    )
+    mock_fitz_open.side_effect = Exception("Plik jest uszkodzony")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await PDFService.extract_pages_from_url("1706.03762")
+
+    assert exc_info.value.status_code == 500
+    assert "Błąd przetwarzania pliku PDF" in exc_info.value.detail
+
+
+# ============================================================================
+# TESTY: PDFService.build_grounded_context
+# ============================================================================
+
+def test_build_grounded_context():
+    """Testuje budowanie sformatowanego kontekstu dla LLM z wyekstrahowanych stron."""
+    pages_data = [
+        {"page": 1, "text": "Pierwsza strona opisu."},
+        {"page": 2, "text": "Druga strona opisu."}
+    ]
+
+    context = PDFService.build_grounded_context("1706.03762", pages_data)
+
+    assert "=== START DOKUMENTU: arXiv:1706.03762 ===" in context
+    assert "--- [DOKUMENT: 1706.03762 | STRONA: 1] ---" in context
+    assert "Pierwsza strona opisu." in context
+    assert "--- [DOKUMENT: 1706.03762 | STRONA: 2] ---" in context
+    assert "Druga strona opisu." in context
+    assert "=== KONIEC DOKUMENTU: arXiv:1706.03762 ===" in context
