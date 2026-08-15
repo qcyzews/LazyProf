@@ -2,7 +2,6 @@
 import sys
 import os
 import gradio as gr
-import uvicorn
 
 # Dodajemy bieżący katalog do sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +19,6 @@ demo = gr.Interface(
 # Łączymy FastAPI i Gradio w jedną aplikację
 app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
-if __name__ == "__main__":
-    # Uruchomienie lokalne / bezpośrenie
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+# USUŃ / ZAKOMENTUJ PONIŻSZY BLOK:
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=7860)
