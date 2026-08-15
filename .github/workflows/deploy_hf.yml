@@ -32,8 +32,8 @@ jobs:
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
 
       - name: Run pytest
+        working-directory: ./backend
         run: |
-          cd backend
           pytest
 
   deploy:
