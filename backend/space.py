@@ -1,7 +1,6 @@
 # /backend/space.py
 import os
 import sys
-import uvicorn
 import gradio as gr
 import spaces
 
@@ -12,12 +11,12 @@ os.environ["GRADIO_SSR_MODE"] = "false"
 def _dummy_gpu_check():
     pass
 
-# Dodanie ścieżki do importów
+# Dodanie ścieżki do importów lokalnych
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.main import app as fastapi_app
 
-# Prosty panel informacyjny w Gradio
+# Tworzymy widok Gradio
 with gr.Blocks(title="LazyProf API") as demo:
     gr.Markdown(
         "# 🚀 LazyProf Backend API\n\n"
@@ -26,9 +25,9 @@ with gr.Blocks(title="LazyProf API") as demo:
         "* **Status serwera:** [/health](/health)"
     )
 
-# Montujemy Gradio na podścieżce /ui, dzięki czemu FastAPI zachowuje główny ruch na "/"
+# Montujemy Gradio pod ścieżką /ui, dzięki czemu FastAPI odpowiada na korzeniu /
 app = gr.mount_gradio_app(fastapi_app, demo, path="/ui")
 
 if __name__ == "__main__":
-    # Uruchomienie serwera Uvicorn na porcie 7860
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    # Standardowe uruchomienie aplikacji Gradio z montowanym FastAPI dla HF Spaces
+    demo.launch(server_name="0.0.0.0", server_port=7860, ssr_mode=False)
