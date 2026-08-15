@@ -1,0 +1,27 @@
+name: Deploy Backend to Hugging Face Spaces
+
+on:
+  push:
+    branches: [ main ]
+    # Akcja uruchomi się tylko wtedy, gdy zmienisz pliki w backendzie
+    paths:
+      - 'backend/**'
+
+permissions:
+  contents: read
+  id-token: write  # Kluczowe dla działania Trusted Publishers (OIDC)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Backend to HF Space
+        uses: huggingface/hf-hub-action@v1
+        with:
+          space-id: ARMLabs/LazyProfBackend
+          directory: backend
