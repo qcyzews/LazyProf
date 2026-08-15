@@ -7,6 +7,7 @@ on:
     paths:
       - 'backend/**'
       - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,11 +48,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Sync Backend to HF Space
-        uses: huggingface/huggingface-spaces-action@v1
-        with:
-          space-id: ARMlabs/LazyProfBackend
-          directory: backend
+      - name: Install Hugging Face CLI
+        run: |
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      
+      - name: Upload backend to HF Space
+        env:
+          HF_OIDC_RESOURCE: spaces/ARMlabs/LazyProfBackend
+        run: |
+          hf upload spaces/ARMlabs/LazyProfBackend ./backend . --commit-message "Deploy backend from GitHub Commit ${GITHUB_SHA::7}"
