@@ -1,18 +1,43 @@
-name: Deploy Backend to Hugging Face Spaces
+# /.github/workflows/deploy_hf.yml
+name: CI/CD - Test and Deploy Backend to Hugging Face Spaces
 
 on:
   push:
     branches: [ main ]
-    # Akcja uruchomi się tylko wtedy, gdy zmienisz pliki w backendzie
     paths:
       - 'backend/**'
 
 permissions:
   contents: read
-  id-token: write  # Kluczowe dla działania Trusted Publishers (OIDC)
+  id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+
+      - name: Run pytest
+        run: |
+          cd backend
+          pytest
+
   deploy:
+    needs: test  # Wdrożenie nastąpi TYLKO po przejściu testów!
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
