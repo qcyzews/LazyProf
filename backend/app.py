@@ -4,8 +4,8 @@ import os
 import gradio as gr
 import uvicorn
 
-# Dodajemy katalog 'backend' do ścieżki Pythona, aby import 'from app.main' działał poprawnie
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "backend")))
+# Dodajemy katalog główny (w którym znajduje się app.py i folder app/) do ścieżki Pythona
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.main import app as fastapi_app
 
