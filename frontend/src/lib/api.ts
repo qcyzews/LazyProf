@@ -3,24 +3,19 @@ import { ArticleMetadata, StreamStatus } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
-/**
- * Przeszukuje bazy arXiv poprzez backend FastAPI.
- */
-export async function searchArticles(query: string, maxResults: number = 5): Promise<ArticleMetadata[]> {
+export async function searchArticles(
+  query: string,
+  maxResults: number = 5
+): Promise<ArticleMetadata[]> {
   const response = await fetch(`${API_BASE_URL}/search`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      query,
-      max_results: maxResults,
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, max_results: maxResults }),
   });
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || 'Failed to fetch articles from arXiv.');
+    throw new Error(errorData.detail || 'Nie udało się pobrać artykułów z arXiv.');
   }
 
   return response.json();
@@ -33,14 +28,12 @@ export interface StreamCallbacks {
   onError?: (error: string) => void;
 }
 
-/**
- * Nawiązuje połączenie SSE z endpointem /analyze-stream i przekazuje zdarzenia do callbacków.
- */
 export async function analyzeArticlesStream(
   articles: ArticleMetadata[],
   userInstruction: string,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  model: string = 'gemini-1.5-pro'
 ): Promise<void> {
   const payload = {
     articles: articles.map((art) => ({
@@ -49,21 +42,21 @@ export async function analyzeArticlesStream(
       pdf_url: art.pdf_url,
     })),
     user_instruction: userInstruction,
+    model: model,
   };
 
   try {
     await fetchEventSource(`${API_BASE_URL}/analyze-stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal,
-      openWhenHidden: true, // Kontynuuj strumieniowanie nawet po przełączeniu karty w przeglądarce
+      openWhenHidden: true,
 
       async onopen(response) {
         if (!response.ok) {
-          throw new Error(`Failed to initialize analysis stream: ${response.statusText}`);
+          const errText = await response.text().catch(() => '');
+          throw new Error(errText || `Błąd inicjalizacji strumienia Gemini: ${response.statusText}`);
         }
       },
 
@@ -78,6 +71,7 @@ export async function analyzeArticlesStream(
               callbacks.onStatus?.({
                 step: data.step,
                 message: data.message,
+                progress: data.progress,
               });
               break;
 
@@ -92,33 +86,27 @@ export async function analyzeArticlesStream(
               break;
 
             case 'error':
-              callbacks.onError?.(data.message || data.detail || 'An unexpected error occurred.');
-              break;
-
-            default:
+              callbacks.onError?.(data.message || data.detail || 'Błąd przetwarzania Gemini.');
               break;
           }
         } catch (e) {
-          console.error('Error parsing SSE event data:', e);
+          console.error('Błąd parsowania zdarzenia SSE:', e);
         }
       },
 
       onerror(err) {
-        console.error('SSE Connection Error:', err);
-        callbacks.onError?.(err?.message || 'Connection lost during analysis stream.');
-        throw err; // Zapobiega automatycznym ponownym próbom w przypadku błędu
+        console.error('Błąd połączenia SSE:', err);
+        callbacks.onError?.(err?.message || 'Utracono połączenie podczas analizy Gemini.');
+        throw err;
       },
     });
   } catch (error: any) {
     if (error.name !== 'AbortError') {
-      callbacks.onError?.(error.message || 'Error executing stream.');
+      callbacks.onError?.(error.message || 'Wystąpił błąd podczas strumieniowania.');
     }
   }
 }
 
-/**
- * Nawiązuje połączenie SSE z endpointem /translate-stream i przekazuje przetłumaczone tokeny na żywo.
- */
 export async function translateReportStream(
   text: string,
   targetLanguage: string = 'Polish',
@@ -133,16 +121,14 @@ export async function translateReportStream(
   try {
     await fetchEventSource(`${API_BASE_URL}/translate-stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal,
       openWhenHidden: true,
 
       async onopen(response) {
         if (!response.ok) {
-          throw new Error(`Failed to initialize translation stream: ${response.statusText}`);
+          throw new Error(`Błąd inicjalizacji tłumaczenia: ${response.statusText}`);
         }
       },
 
@@ -171,26 +157,23 @@ export async function translateReportStream(
               break;
 
             case 'error':
-              callbacks.onError?.(data.message || data.detail || 'An unexpected translation error occurred.');
-              break;
-
-            default:
+              callbacks.onError?.(data.message || 'Wystąpił błąd podczas tłumaczenia.');
               break;
           }
         } catch (e) {
-          console.error('Error parsing translation SSE data:', e);
+          console.error('Błąd parsowania zdarzenia tłumaczenia SSE:', e);
         }
       },
 
       onerror(err) {
-        console.error('SSE Translation Error:', err);
-        callbacks.onError?.(err?.message || 'Connection lost during translation stream.');
+        console.error('Błąd połączenia SSE (tłumaczenie):', err);
+        callbacks.onError?.(err?.message || 'Utracono połączenie podczas tłumaczenia.');
         throw err;
       },
     });
   } catch (error: any) {
     if (error.name !== 'AbortError') {
-      callbacks.onError?.(error.message || 'Error executing translation stream.');
+      callbacks.onError?.(error.message || 'Wystąpił błąd podczas tłumaczenia.');
     }
   }
 }
