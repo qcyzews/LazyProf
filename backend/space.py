@@ -2,10 +2,17 @@
 import os
 import sys
 
-# Wyłączamy serwer SSR Node.js w Gradio przed zaimportowaniem biblioteki
 os.environ["GRADIO_SSR_MODE"] = "false"
 
+# Dodajemy bibliotekę spaces oraz atrapę funkcji dla skanera ZeroGPU
 import gradio as gr
+import spaces
+
+
+@spaces.GPU
+def _dummy_gpu_check():
+    pass
+
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
