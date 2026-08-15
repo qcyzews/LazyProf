@@ -4,30 +4,28 @@ import sys
 import gradio as gr
 import spaces
 
-# Wymuszenie braku SSR dla Gradio na Hugging Face Spaces
+# Wymuszenie braku SSR
 os.environ["GRADIO_SSR_MODE"] = "false"
 
 @spaces.GPU
 def _dummy_gpu_check():
     pass
 
-# Dodanie ścieżki do importów lokalnych
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app.main import app as fastapi_app
+# 1. Importujemy router i dekoratory z Twojego backendu
+from app.api.v1.endpoints import router as api_router
 
-# Tworzymy widok Gradio
+# 2. Tworzymy minimalny interfejs Gradio
 with gr.Blocks(title="LazyProf API") as demo:
-    gr.Markdown(
-        "# 🚀 LazyProf Backend API\n\n"
-        "Serwer działa poprawnie!\n\n"
-        "* **Dokumentacja API (Swagger):** [/docs](/docs)\n"
-        "* **Status serwera:** [/health](/health)"
-    )
+    gr.Markdown("# 🚀 LazyProf Backend API is running")
 
-# Montujemy Gradio pod ścieżką /ui, dzięki czemu FastAPI odpowiada na korzeniu /
-app = gr.mount_gradio_app(fastapi_app, demo, path="/ui")
+# 3. Inicjalizujemy aplikację Gradio
+app = demo.app
 
-if __name__ == "__main__":
-    # Standardowe uruchomienie aplikacji Gradio z montowanym FastAPI dla HF Spaces
-    demo.launch(server_name="0.0.0.0", server_port=7860, ssr_mode=False)
+# 4. Podpinamy Twój router FastAPI bezpośrednio pod aplikację
+app.include_router(api_router, prefix="/api/v1")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "app": "LazyProf Backend"}
