@@ -1,1 +1,31 @@
-langchain-google-genai>=1.0.0
+# Serwer i interfejs dla HF Spaces
+gradio>=4.0.0,<6.0.0
+fastapi>=0.110.0,<1.0.0
+uvicorn>=0.28.0
+
+# Przetwarzanie PDF
+PyMuPDF>=1.23.0,<2.0.0
+
+# Asynchroniczne I/O i narzędzia HTTP
+httpx>=0.27.0,<1.0.0
+httpx-sse>=0.4.0
+sse-starlette>=2.0.0
+aiolimiter>=1.1.0
+
+# LangChain, LangGraph i AI (LangChain bardzo szybko się zmienia, warto trzymać ramy)
+langchain-core>=0.3.0,<1.0.0
+langchain-google-genai>=2.0.0,<3.0.0
+langgraph>=0.2.0,<1.0.0
+arxiv>=2.1.0
+tenacity>=8.2.0
+protobuf>=4.25.0
+
+# Modelowanie danych i konfiguracja
+pydantic>=2.7.0,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+python-dotenv>=1.0.0
+
+# Generowanie raportów i baza danych
+Markdown>=3.6
+weasyprint>=61.0
+redis>=5.0.0

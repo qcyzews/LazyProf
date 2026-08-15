@@ -8,7 +8,7 @@ load_dotenv()
 class Settings(BaseSettings):
     PROJECT_NAME: str = "LazyProf Backend"
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-
+    MAX_CONCURRENT_PDF_PARSES: int = 4
         
     # Modele Google Gemini
     MAP_MODEL: str = "gemini-3.1-flash-lite"  # Szybki i ultrawydajny model do etapu MAP
@@ -66,9 +66,5 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore"
     )
-
-#    class Config:
-#        env_file = ".env"
-#        extra = "ignore"
         
 settings = Settings()
