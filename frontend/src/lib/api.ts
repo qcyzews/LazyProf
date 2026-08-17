@@ -54,10 +54,16 @@ export async function analyzeArticlesStream(
       openWhenHidden: true,
 
       async onopen(response) {
-        if (!response.ok) {
-          const errText = await response.text().catch(() => '');
-          throw new Error(errText || `Błąd inicjalizacji strumienia Gemini: ${response.statusText}`);
+        const contentType = response.headers.get('content-type');
+
+        // Sprawdzamy czy odpowiedź jest poprawna oraz czy serwer zwrócił strumień SSE
+        if (response.ok && contentType?.includes('text/event-stream')) {
+          return; // Wszystko gra, zaczynamy odbierać strumień
         }
+
+        // Jeśli serwer zwrócił błąd (np. 400, 422, 500), odczytujemy komunikat z JSON/tekstu
+        const errText = await response.text().catch(() => '');
+        throw new Error(errText || `Błąd serwera (${response.status}): ${response.statusText}`);
       },
 
       onmessage(msg) {
@@ -97,7 +103,9 @@ export async function analyzeArticlesStream(
       onerror(err) {
         console.error('Błąd połączenia SSE:', err);
         callbacks.onError?.(err?.message || 'Utracono połączenie podczas analizy Gemini.');
-        throw err;
+    
+        // Rzucenie błędu zapobiega zapętleniu ponownych prób (retry loop) przez fetchEventSource
+        throw err; 
       },
     });
   } catch (error: any) {

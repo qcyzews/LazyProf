@@ -175,8 +175,20 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                     "detail": str(stream_err)
                 })
             }
+            # OPCJONALNIE: Wyślij complete po błędzie, aby pętla na frontendzie ładnie się zamknęła
+            yield {
+                "event": "complete",
+                "data": json.dumps({"status": "error_terminated"})
+            }
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Kluczowe dla serwerów proxy (Nginx / Cloudflare)
+        }
+    )
 
 
 @router.post("/translate-stream")
@@ -215,7 +227,14 @@ async def translate_and_stream(payload: TranslateRequest):
                 })
             }
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Kluczowe dla serwerów proxy (Nginx / Cloudflare)
+        }
+    )
 
 
 # --- EXPORT DO PDF ---
