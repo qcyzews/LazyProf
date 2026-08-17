@@ -10,4 +10,5 @@ export interface ArticleMetadata {
 export interface StreamStatus {
   step: 'downloading' | 'map' | 'reduce' | 'translating';
   message: string;
+  progress?: number; // np. 0-100% dla etapu przetwarzania artykułów
 }
