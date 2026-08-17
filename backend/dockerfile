@@ -5,6 +5,17 @@ WORKDIR /code
 # Instalujemy zależności systemu operacyjnego (jeśli PyMuPDF/Poppler ich wymagają)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    python3-dev \
+    python3-pip \
+    python3-cffi \
+    python3-brotli \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz-subset0 \
+    libjpeg-dev \
+    libopenjp2-7-dev \
+    libffi-dev \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Kopiujemy plik wymagań i instalujemy biblioteki
