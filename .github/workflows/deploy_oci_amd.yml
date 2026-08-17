@@ -1,5 +1,5 @@
-# /.github/workflows/deploy_hf.yml
-name: CI/CD - Test and Deploy Backend to Hugging Face Spaces
+# /github/workflows/deploy_oci_amd.yml
+name: CI/CD - Test and Deploy Backend to OCI (Self-Hosted)
 
 on:
   push:
@@ -9,13 +9,9 @@ on:
       - '.github/workflows/**'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Testy wykonują się w chmurze GitHub (szybko i za darmo)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,18 +40,25 @@ jobs:
 
   deploy:
     needs: test  # Wdrożenie nastąpi TYLKO po przejściu testów!
-    runs-on: ubuntu-latest
+    runs-on: self-hosted  # Tutaj przekazujemy zadanie do Twojego serwera AMD!
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Hugging Face CLI
+      - name: Build Docker Image
         run: |
-          curl -LsSf https://hf.co/cli/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      
-      - name: Upload backend to HF Space
-        env:
-          HF_OIDC_RESOURCE: spaces/ARMlabs/LazyProfBackend
+          # Budujemy obraz bezpośrednio z katalogu /backend (lub podmień ścieżkę do Dockerfile)
+          docker build -t lazyprof-backend ./backend
+
+      - name: Run Docker Container
         run: |
-          hf upload spaces/ARMlabs/LazyProfBackend ./backend . --commit-message "Deploy backend from GitHub Commit ${GITHUB_SHA::7}"
+          # Zatrzymaj i usuń stary kontener, jeśli istnieje
+          docker stop lazyprof-backend || true
+          docker rm lazyprof-backend || true
+
+          # Uruchom nowy kontener z przekazanymi zmiennymi środowiskowymi
+          docker run -d \
+            --name lazyprof-backend \
+            --restart always \
+            -p 8000:8000 \
+            lazyprof-backend
