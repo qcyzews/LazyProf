@@ -1,4 +1,3 @@
-# /github/workflows/deploy_oci_amd.yml
 name: CI/CD - Test and Deploy Backend to OCI (Self-Hosted)
 
 on:
@@ -11,7 +10,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest # Testy wykonują się w chmurze GitHub (szybko i za darmo)
+    runs-on: ubuntu-latest # Testy wykonują się w chmurze GitHub
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,25 +39,39 @@ jobs:
 
   deploy:
     needs: test  # Wdrożenie nastąpi TYLKO po przejściu testów!
-    runs-on: self-hosted  # Tutaj przekazujemy zadanie do Twojego serwera AMD!
+    runs-on: self-hosted  # Serwer OCI AMD
     steps:
-      - name: Checkout repository
+      # POBIERANIE TYLKO BACKENDU I WORKFLOWS (sparse-checkout)
+      - name: Checkout backend only
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            backend
+            .github
 
       - name: Build Docker Image
         run: |
-          # Budujemy obraz bezpośrednio z katalogu /backend (lub podmień ścieżkę do Dockerfile)
           docker build -t lazyprof-backend ./backend
 
-      - name: Run Docker Container
+      # TWORZENIE PLIKU .ENV Z SEKRETU GITHUBA I URUCHOMIENIE KONTENERA
+      - name: Deploy Docker Container with Envs
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
         run: |
-          # Zatrzymaj i usuń stary kontener, jeśli istnieje
+          # 1. Zapisz treść sekretu do pliku .env w katalogu roboczym
+          echo "$ENV_FILE_CONTENT" > .env
+
+          # 2. Zatrzymaj i usuń stary kontener, jeśli istnieje
           docker stop lazyprof-backend || true
           docker rm lazyprof-backend || true
 
-          # Uruchom nowy kontener z przekazanymi zmiennymi środowiskowymi
+          # 3. Uruchom nowy kontener wskazując utworzony plik .env
           docker run -d \
             --name lazyprof-backend \
             --restart always \
+            --env-file .env \
             -p 8000:8000 \
             lazyprof-backend
+
+          # 4. (Opcjonalnie) Usuń plik .env z dysku runnera dla bezpieczeństwa
+          rm -f .env
