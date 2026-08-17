@@ -1,3 +1,4 @@
+# .github/workflows/deploy_oci_amd.yml
 name: CI/CD - Test and Deploy Backend to OCI (Self-Hosted)
 
 on:
@@ -61,7 +62,12 @@ jobs:
           # 1. Zapisz treść sekretu do pliku .env w katalogu roboczym
           echo "$ENV_FILE_CONTENT" > .env
 
-          # 2. Zatrzymaj i usuń stary kontener, jeśli istnieje
+          # 2. Bezpieczne zwolnienie portu 8000 i czyszczenie starych kontenerów
+          # Zatrzymaj i usuń wszystkie kontenery zbudowane z obrazu lazyprof-backend
+          docker ps -q --filter "ancestor=lazyprof-backend" | xargs -r docker stop || true
+          docker ps -aq --filter "ancestor=lazyprof-backend" | xargs -r docker rm || true
+
+          # Upewnij się, że kontener o nazwie lazyprof-backend jest usunięty
           docker stop lazyprof-backend || true
           docker rm lazyprof-backend || true
 
@@ -73,5 +79,5 @@ jobs:
             -p 8000:8000 \
             lazyprof-backend
 
-          # 4. (Opcjonalnie) Usuń plik .env z dysku runnera dla bezpieczeństwa
+          # 4. Usunięcie pliku .env z dysku runnera po uruchomieniu kontenera
           rm -f .env
