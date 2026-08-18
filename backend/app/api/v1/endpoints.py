@@ -3,7 +3,6 @@ import json
 import logging
 import markdown
 from typing import List, Optional, Dict, Any
-import arxiv
 from fastapi import APIRouter, HTTPException, Response, Status
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel, Field
@@ -18,11 +17,13 @@ from app.models.schemas import (
     ProcessPdfResponse,
     AnalyzeRequest,
     TranslateRequest,
-    StatusResponse
+    StatusResponse.
+    SearchResponse
 )
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
 from app.services.quota_service import quota_service
+from app.services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,34 +65,19 @@ SSE_HEADERS = {
 
 # --- ENDPOINTY ZAPYTAN I EKSTRAKCJI ---
 
-@router.post("/search", response_model=List[ArticleMetadata])
+@router.post("/search", response_model=SearchResponse)
 async def search_arxiv(payload: SearchRequest):
-    """Searches arXiv API based on user query."""
+    """Searches arXiv API using SearchService with LLM query expansion."""
     try:
-        client = arxiv.Client()
-        search = arxiv.Search(
+        results = await SearchService.search_with_expansion(
             query=payload.query,
             max_results=payload.max_results,
-            sort_by=arxiv.SortCriterion.Relevance
+            user_mode="fast"  # Lub pobierane z payload jeśli masz takie pole
         )
-
-        results = []
-        for result in client.results(search):
-            paper_id = result.entry_id.split('/')[-1]
-            results.append(
-                ArticleMetadata(
-                    arxiv_id=paper_id,
-                    title=result.title.replace("\n", " "),
-                    authors=[a.name for a in result.authors],
-                    published=result.published.strftime("%Y-%m-%d"),
-                    summary=result.summary.replace("\n", " "),
-                    pdf_url=result.pdf_url
-                )
-            )
         return results
     except Exception as e:
-        logger.error(f"arXiv API Error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Błąd komunikacji z serwisem arXiv API.")
+        logger.error(f"Search Service Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd podczas wyszukiwania artykułów.")
 
 
 @router.post("/parse-pdf", response_model=ProcessPdfResponse)

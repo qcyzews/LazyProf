@@ -48,3 +48,8 @@ class ModeStatus(BaseModel):
 class StatusResponse(BaseModel):
     status: str = "ok"
     modes: Dict[str, ModeStatus]
+
+class SearchResponse(BaseModel):
+    original_query: str
+    expanded_query: str
+    articles: List[ArticleMetadata]
