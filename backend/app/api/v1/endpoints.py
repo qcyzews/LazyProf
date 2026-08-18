@@ -345,3 +345,43 @@ async def get_system_status():
     except Exception as e:
         logger.error(f"Status Check Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie udało się pobrać statusu systemu.")
+
+from sse_starlette.sse import EventSourceResponse
+import json
+
+@router.get("/run-grounded-analysis-stream")
+async def run_grounded_analysis_stream(
+    arxiv_ids: str, # przesyłane jako rozdzielone przecinkami ID np. "2103.00020,2201.00001"
+    user_instruction: str = "",
+    mode: str = "fast"
+):
+    async def event_generator():
+        ids_list = [id.strip() for id in arxiv_ids.split(",") if id.strip()]
+        
+        initial_state = {
+            "arxiv_ids": ids_list,
+            "user_instruction": user_instruction,
+            "mode": mode,
+            "papers_data": {},
+            "papers_metadata": {},
+            "analysis_markdown": "",
+            "verification_errors": [],
+            "judge_feedback": "",
+            "retry_count": 0,
+            "is_valid": False,
+            "audit_trail": []
+        }
+
+        # Strumieniowanie kroków z LangGraph (astream_events)
+        async for event in multi_paper_graph.astream_events(initial_state, version="v2"):
+            # Wysyłamy zdarzenia w formacie JSON
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "type": event.get("event"),
+                    "name": event.get("name"),
+                    "data": event.get("data")
+                })
+            }
+
+    return EventSourceResponse(event_generator())
