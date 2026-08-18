@@ -2,14 +2,13 @@
 import json
 import logging
 import markdown
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import arxiv
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Status
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel, Field
 from weasyprint import HTML
 
-# Import nowego grafu obsługującego 1 lub wiele prac
 from app.graph.workflow import multi_paper_graph
 
 from app.models.schemas import (
@@ -18,17 +17,18 @@ from app.models.schemas import (
     ProcessPdfRequest, 
     ProcessPdfResponse,
     AnalyzeRequest,
-    TranslateRequest
+    TranslateRequest,
+    StatusResponse
 )
 from app.services.pdf_service import PDFService
 from app.services.rag_engine import RAGEngine
 from app.services.quota_service import quota_service
-from app.models.schemas import StatusResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# --- SCHEMAS DLA WERYFIKACJI UGRUNTOWANEJ (LANGGRAPH) ---
+
+# --- SCHEMAS ---
 
 class MultiPaperGroundedRequest(BaseModel):
     arxiv_ids: List[str] = Field(
@@ -47,7 +47,19 @@ class MultiPaperGroundedResponse(BaseModel):
     total_attempts: int
     is_valid: bool
     analysis_markdown: str
-    audit_trail: Optional[List[dict]] = []
+    audit_trail: Optional[List[Dict[str, Any]]] = []
+
+class ExportPdfRequest(BaseModel):
+    markdown: str = Field(..., min_length=1, max_length=150000, description="Treść raportu w formacie Markdown")
+
+
+# --- HELPER DO NAGŁÓWKÓW SSE ---
+
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 # --- ENDPOINTY ZAPYTAN I EKSTRAKCJI ---
@@ -79,7 +91,7 @@ async def search_arxiv(payload: SearchRequest):
         return results
     except Exception as e:
         logger.error(f"arXiv API Error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"arXiv API Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Błąd komunikacji z serwisem arXiv API.")
 
 
 @router.post("/parse-pdf", response_model=ProcessPdfResponse)
@@ -100,19 +112,14 @@ async def parse_pdf(payload: ProcessPdfRequest):
         )
     except Exception as e:
         logger.error(f"PDF Processing Error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF Processing Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Nie udało się przetworzyć pliku PDF.")
 
 
 # --- ENDPOINTY STRUMIENIOWE (SSE) ---
 
 @router.post("/analyze-stream")
 async def analyze_and_stream(payload: AnalyzeRequest):
-    """
-    Streams analysis workflow via SSE:
-    1. Status: Downloading papers
-    2. Status: Map stage (parallel extraction)
-    3. Status/Tokens: Reduce stage (Gemini final synthesis)
-    """
+    """Streams analysis workflow via SSE (Map-Reduce stage)."""
     rag_engine = RAGEngine()
 
     async def event_generator():
@@ -121,7 +128,7 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 "event": "status",
                 "data": json.dumps({
                     "step": "downloading", 
-                    "message": f"Downloading and parsing {len(payload.articles)} research paper(s)..."
+                    "message": f"Pobieranie i parsowanie {len(payload.articles)} prac naukowych..."
                 })
             }
 
@@ -138,7 +145,7 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 "event": "status",
                 "data": json.dumps({
                     "step": "map", 
-                    "message": "Analyzing individual papers concurrently (Map Stage)..."
+                    "message": "Analiza poszczególnych artykułów w trybie równoległym (Map Stage)..."
                 })
             }
 
@@ -151,7 +158,7 @@ async def analyze_and_stream(payload: AnalyzeRequest):
                 "event": "status",
                 "data": json.dumps({
                     "step": "reduce", 
-                    "message": "Generating final comparative report with Gemini..."
+                    "message": "Generowanie końcowego raportu porównawczego (Reduce Stage)..."
                 })
             }
 
@@ -171,24 +178,16 @@ async def analyze_and_stream(payload: AnalyzeRequest):
             yield {
                 "event": "error",
                 "data": json.dumps({
-                    "message": "An error occurred during paper processing.",
+                    "message": "Wystąpił błąd podczas przetwarzania prac.",
                     "detail": str(stream_err)
                 })
             }
-            # OPCJONALNIE: Wyślij complete po błędzie, aby pętla na frontendzie ładnie się zamknęła
             yield {
                 "event": "complete",
                 "data": json.dumps({"status": "error_terminated"})
             }
 
-    return EventSourceResponse(
-        event_generator(),
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Kluczowe dla serwerów proxy (Nginx / Cloudflare)
-        }
-    )
+    return EventSourceResponse(event_generator(), headers=SSE_HEADERS)
 
 
 @router.post("/translate-stream")
@@ -202,7 +201,7 @@ async def translate_and_stream(payload: TranslateRequest):
                 "event": "status",
                 "data": json.dumps({
                     "step": "translating", 
-                    "message": f"Translating report into {payload.target_language}..."
+                    "message": f"Tłumaczenie raportu na język: {payload.target_language}..."
                 })
             }
 
@@ -222,113 +221,101 @@ async def translate_and_stream(payload: TranslateRequest):
             yield {
                 "event": "error",
                 "data": json.dumps({
-                    "message": "An error occurred during translation.",
+                    "message": "Wystąpił błąd podczas tłumaczenia.",
                     "detail": str(stream_err)
                 })
             }
 
-    return EventSourceResponse(
-        event_generator(),
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Kluczowe dla serwerów proxy (Nginx / Cloudflare)
-        }
-    )
+    return EventSourceResponse(event_generator(), headers=SSE_HEADERS)
 
 
 # --- EXPORT DO PDF ---
 
 @router.post("/export-pdf")
-async def export_pdf(payload: dict):
-    """Converts a Markdown report into a beautifully styled PDF document using WeasyPrint."""
-    md_text = payload.get("markdown", "")
-    if not md_text:
-        raise HTTPException(status_code=400, detail="Markdown content cannot be empty.")
+async def export_pdf(payload: ExportPdfRequest):
+    """Converts a Markdown report into a styled PDF document using WeasyPrint."""
+    try:
+        html_content = markdown.markdown(
+            payload.markdown, 
+            extensions=['extra', 'tables', 'fenced_code']
+        )
 
-    html_content = markdown.markdown(
-        md_text, 
-        extensions=['extra', 'tables', 'fenced_code']
-    )
-
-    full_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            @page {{
-                size: A4;
-                margin: 20mm 15mm;
-                @bottom-right {{
-                    content: "Page " counter(page) " of " counter(pages);
-                    font-size: 9pt;
-                    color: #64748b;
-                }}
-            }}
-            body {{
-                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-                font-size: 10pt;
-                line-height: 1.6;
-                color: #1e293b;
-            }}
-            h1 {{ font-size: 18pt; color: #0f172a; margin-bottom: 12px; border-bottom: 2px solid #6366f1; padding-bottom: 6px; }}
-            h2 {{ font-size: 14pt; color: #1e1b4b; margin-top: 18px; margin-bottom: 8px; border-left: 4px solid #6366f1; padding-left: 8px; }}
-            h3 {{ font-size: 11pt; color: #334155; margin-top: 14px; margin-bottom: 6px; }}
-            p {{ margin-bottom: 10px; text-align: justify; }}
-            ul, ol {{ margin-bottom: 10px; padding-left: 20px; }}
-            li {{ margin-bottom: 4px; }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin: 14px 0;
+        full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        @page {{
+            size: A4;
+            margin: 20mm 15mm;
+            @bottom-right {{
+                content: "Strona " counter(page) " z " counter(pages);
                 font-size: 9pt;
+                color: #64748b;
             }}
-            th, td {{
-                border: 1px solid #cbd5e1;
-                padding: 6px 10px;
-                text-align: left;
-            }}
-            th {{
-                background-color: #f1f5f9;
-                font-weight: bold;
-                color: #0f172a;
-            }}
-            tr:nth-child(even) {{
-                background-color: #f8fafc;
-            }}
-            code {{
-                font-family: 'Courier New', Courier, monospace;
-                background-color: #f1f5f9;
-                padding: 2px 4px;
-                font-size: 8.5pt;
-                border-radius: 3px;
-            }}
-        </style>
-    </head>
-    <body>
-        {html_content}
-    </body>
-    </html>
-    """
+        }}
+        body {{
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            font-size: 10pt;
+            line-height: 1.6;
+            color: #1e293b;
+        }}
+        h1 {{ font-size: 18pt; color: #0f172a; margin-bottom: 12px; border-bottom: 2px solid #6366f1; padding-bottom: 6px; }}
+        h2 {{ font-size: 14pt; color: #1e1b4b; margin-top: 18px; margin-bottom: 8px; border-left: 4px solid #6366f1; padding-left: 8px; }}
+        h3 {{ font-size: 11pt; color: #334155; margin-top: 14px; margin-bottom: 6px; }}
+        p {{ margin-bottom: 10px; text-align: justify; }}
+        ul, ol {{ margin-bottom: 10px; padding-left: 20px; }}
+        li {{ margin-bottom: 4px; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 14px 0;
+            font-size: 9pt;
+        }}
+        th, td {{
+            border: 1px solid #cbd5e1;
+            padding: 6px 10px;
+            text-align: left;
+        }}
+        th {{
+            background-color: #f1f5f9;
+            font-weight: bold;
+            color: #0f172a;
+        }}
+        tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        code {{
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #f1f5f9;
+            padding: 2px 4px;
+            font-size: 8.5pt;
+            border-radius: 3px;
+        }}
+    </style>
+</head>
+<body>
+    {html_content}
+</body>
+</html>"""
 
-    pdf_bytes = HTML(string=full_html).write_pdf()
+        pdf_bytes = HTML(string=full_html).write_pdf()
 
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=LazyProf_Report.pdf"}
-    )
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=LazyProf_Report.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"PDF Export Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd podczas generowania pliku PDF.")
 
 
-# --- LANGGRAPH GROUNDED AGENT (1 LUB WIELE PRAC) ---
+# --- LANGGRAPH GROUNDED AGENT ---
 
 @router.post("/test-grounded-analysis", response_model=MultiPaperGroundedResponse)
 async def test_grounded_analysis(request: MultiPaperGroundedRequest):
-    """
-    Uruchamia ugruntowaną weryfikację LangGraph z pętlą self-correction
-    dla 1 lub wielu artykułów z arXiv.
-    """
+    """Uruchamia ugruntowaną weryfikację LangGraph z pętlą self-correction."""
     try:
         initial_state = {
             "arxiv_ids": request.arxiv_ids,
@@ -348,18 +335,25 @@ async def test_grounded_analysis(request: MultiPaperGroundedRequest):
             arxiv_ids=final_state["arxiv_ids"],
             total_attempts=final_state.get("retry_count", 0),
             is_valid=final_state.get("is_valid", False),
-            analysis_markdown=final_state["analysis_markdown"],
+            analysis_markdown=final_state.get("analysis_markdown", ""),
             audit_trail=final_state.get("audit_trail", [])
         )
     except Exception as e:
         logger.error(f"LangGraph Processing Error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Błąd przetwarzania LangGraph: {str(e)}")
+        raise HTTPException(status_code=500, detail="Błąd przetwarzania grafu LangGraph.")
 
-@router.get("/status", response_model=StatusResponse)                               # <-- 2. Nowy endpoint
+
+# --- STATUS SYSTEMU ---
+
+@router.get("/status", response_model=StatusResponse)
 async def get_system_status():
     """Zwraca status systemu oraz dostępność trybów prędkości na podstawie RPD."""
-    modes_status = await quota_service.get_available_modes_status()
-    return {
-        "status": "ok",
-        "modes": modes_status
-    }
+    try:
+        modes_status = await quota_service.get_available_modes_status()
+        return {
+            "status": "ok",
+            "modes": modes_status
+        }
+    except Exception as e:
+        logger.error(f"Status Check Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Nie udało się pobrać statusu systemu.")
