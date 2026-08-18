@@ -21,6 +21,7 @@ from app.graph.state import AttemptRecord, JudgeEvaluation, MultiPaperState
 from app.services.arxiv_service import ArxivService
 from app.services.citation_service import CitationVerifier
 from app.services.pdf_service import PDFService, clean_arxiv_id
+from app.models.schemas import QueryExpansionResponse
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -88,33 +89,30 @@ def get_model_for_mode(mode_key: str, temperature: float = 0.1) -> tuple[ChatGoo
     return llm, model_name
 
 
+import json
+import re
+from typing import List
+
 async def expand_keywords_with_llm(user_instruction: str, mode_key: str = "fast") -> List[str]:
     prompt = f"""
-Given the following research query, extract key concepts and generate 5-10 relevant scientific synonyms, technical acronyms, or related terms used in arXiv papers.
+Given the following research query, extract key concepts and generate 3-5 relevant scientific synonyms, technical acronyms, or related terms used in arXiv papers.
 
 Query: "{user_instruction}"
-
-Return ONLY a valid JSON array of strings. Example: ["transformer", "attention mechanism", "self-attention", "VRAM", "parameters"]
 """
     try:
         llm, model_name = get_model_for_mode(mode_key, temperature=0.0)
-        response = await safe_llm_invoke(model_name, llm, prompt)
-        text = response.content if isinstance(response.content, str) else str(response.content)
-        text = text.strip()
+        structured_llm = llm.with_structured_output(QueryExpansionResponse)
+        result = await structured_llm.ainvoke(prompt)
         
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].strip()
-        
-        keywords = json.loads(text)
-        if isinstance(keywords, list):
-            logger.info(f"🧠 [QUERY EXPANSION] Wygenerowane synonimy/klucze: {keywords}")
-            return list(set(keywords))
+        if result and result.keywords:
+            logger.info(f"🧠 [QUERY EXPANSION] Wygenerowane synonimy/klucze: {result.keywords}")
+            return list(set(result.keywords))
+
     except Exception as e:
-        logger.warning(f"⚠️ [QUERY EXPANSION] Błąd generowania synonimów ({e}), używam słów podstawowych.")
-    
-    return [w.strip() for w in re.findall(r'\b\w+\b', user_instruction) if len(w) > 3]
+        logger.warning(f"⚠️ [QUERY EXPANSION] Błąd generowania synonimów ({e}), używam oryginalnego zapytania.")
+
+    # FALLBACK: Wracamy całe, nienaruszone zapytanie zamiast rozbijać je na pojedyncze słowa
+    return [user_instruction]
 
 
 def build_smart_grounded_context(
@@ -222,7 +220,14 @@ async def fetch_papers_node(state: MultiPaperState):
         
         pages_task = PDFService.extract_pages_from_url(pdf_url)
         meta_task = ArxivService.fetch_paper_metadata(clean_id)
-        pages, meta = await asyncio.gather(pages_task, meta_task)
+        # return_exceptions=True chroni przed awarią całego gather, gdy jeden task rzuci wyjątek
+        pages, meta = await asyncio.gather(pages_task, meta_task, return_exceptions=True)
+
+        # Obsługa przypadków, gdy metadane lub strony zwróciły błąd/są puste
+        if isinstance(pages, Exception) or not pages:
+            pages = []
+        if isinstance(meta, Exception) or not meta:
+            meta = {"title": f"arXiv:{clean_id}", "authors": [], "published": ""}
         
         return clean_id, pages, meta
 
@@ -230,10 +235,28 @@ async def fetch_papers_node(state: MultiPaperState):
     
     papers_data = {}
     papers_metadata = {}
+    failed_ids = []
+
     for clean_id, pages, meta in results:
-        papers_data[clean_id] = pages
-        papers_metadata[clean_id] = meta
-        logger.info(f"✅ [1. FETCH] Pobrano arXiv:{clean_id} ('{meta.get('title')}') - {len(pages)} stron.")
+        if pages: 
+            papers_data[clean_id] = pages
+            papers_metadata[clean_id] = meta
+            logger.info(f"✅ [1. FETCH] Pobrano arXiv:{clean_id} ('{meta.get('title')}') - {len(pages)} stron.")
+        else:
+            failed_ids.append(clean_id)
+            logger.warning(f"⚠️ [1. FETCH] Nie udało się pobrać treści dla arXiv:{clean_id}.")
+
+    # Gdy żaden artykuł nie mógł zostać pobrany — zatrzymujemy proces
+    if not papers_data:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Nie udało się pobrać żadnego z podanych artykułów: {', '.join(failed_ids)}"
+        )
+
+    # Przygotowanie informacji audit_trail
+    audit_trail = list(state.get("audit_trail", []))
+    if failed_ids:
+        audit_trail.append(f"⚠️ Ostrzeżenie: Nie udało się pobrać artykułów: {', '.join(failed_ids)}. Analiza została przeprowadzona dla pozostałych dostępnych prac.")
 
     return {
         "papers_data": papers_data,

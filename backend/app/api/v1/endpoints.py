@@ -3,7 +3,7 @@ import json
 import logging
 import markdown
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Response, Status
+from fastapi import APIRouter, HTTPException, Response, status
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel, Field
 from weasyprint import HTML
@@ -17,7 +17,7 @@ from app.models.schemas import (
     ProcessPdfResponse,
     AnalyzeRequest,
     TranslateRequest,
-    StatusResponse.
+    StatusResponse,
     SearchResponse
 )
 from app.services.pdf_service import PDFService
@@ -299,17 +299,19 @@ async def export_pdf(payload: ExportPdfRequest):
 
 # --- LANGGRAPH GROUNDED AGENT ---
 
-@router.post("/test-grounded-analysis", response_model=MultiPaperGroundedResponse)
-async def test_grounded_analysis(request: MultiPaperGroundedRequest):
+@router.post("/run-grounded-analysis", response_model=MultiPaperGroundedResponse)
+async def run_grounded_analysis(request: MultiPaperGroundedRequest):
     """Uruchamia ugruntowaną weryfikację LangGraph z pętlą self-correction."""
     try:
         initial_state = {
             "arxiv_ids": request.arxiv_ids,
             "user_instruction": request.user_instruction,
+            "mode": getattr(request, "mode", "fast"),
             "papers_data": {},
             "papers_metadata": {},
             "analysis_markdown": "",
             "verification_errors": [],
+            "judge_feedback": "",
             "retry_count": 0,
             "is_valid": False,
             "audit_trail": []
@@ -318,7 +320,7 @@ async def test_grounded_analysis(request: MultiPaperGroundedRequest):
         final_state = await multi_paper_graph.ainvoke(initial_state)
 
         return MultiPaperGroundedResponse(
-            arxiv_ids=final_state["arxiv_ids"],
+            arxiv_ids=final_state.get("arxiv_ids", request.arxiv_ids),
             total_attempts=final_state.get("retry_count", 0),
             is_valid=final_state.get("is_valid", False),
             analysis_markdown=final_state.get("analysis_markdown", ""),

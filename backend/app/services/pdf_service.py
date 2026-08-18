@@ -97,11 +97,15 @@ class PDFService:
         except HTTPException:
             raise
         except httpx.HTTPError as e:
-            logger.error(f"Błąd HTTP podczas pobierania PDF z {clean_url}: {e}")
-            raise HTTPException(status_code=500, detail=f"Błąd pobierania pliku PDF: {str(e)}")
+            #logger.error(f"Błąd HTTP podczas pobierania PDF z {clean_url}: {e}")
+            #raise HTTPException(status_code=500, detail=f"Błąd pobierania pliku PDF: {str(e)}")
+            logger.warning(f"⚠️ Nie udało się pobrać pliku PDF z {clean_url}: {e}")
+            return []
         except Exception as e:
-            logger.error(f"Błąd przetwarzania PDF z {clean_url}: {e}")
-            raise HTTPException(status_code=500, detail=f"Błąd przetwarzania pliku PDF: {str(e)}")
+            #logger.error(f"Błąd przetwarzania PDF z {clean_url}: {e}")
+            #raise HTTPException(status_code=500, detail=f"Błąd przetwarzania pliku PDF: {str(e)}")
+            logger.error(f"❌ Błąd przetwarzania pliku PDF z {clean_url}: {e}")
+            return []
 
     @staticmethod
     def build_grounded_context(arxiv_id: str, pages_data: list[dict]) -> str:

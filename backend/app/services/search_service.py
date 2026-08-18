@@ -2,7 +2,7 @@
 import logging
 from typing import List, Dict, Any
 from app.services.arxiv_service import ArxivService
-from app.services.llm_service import expand_keywords_with_llm  # Twoja istniejąca funkcja LLM
+from app.graph.nodes import expand_keywords_with_llm  # Twoja istniejąca funkcja LLM
 
 logger = logging.getLogger("uvicorn.error")
 

@@ -53,3 +53,8 @@ class SearchResponse(BaseModel):
     original_query: str
     expanded_query: str
     articles: List[ArticleMetadata]
+
+class QueryExpansionResponse(BaseModel):
+    keywords: List[str] = Field(
+        description="Lista 3-5 synonimów naukowych, pojęć powiązanych lub skrótów technicznych dla podanego zapytania."
+    )
