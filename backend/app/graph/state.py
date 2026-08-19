@@ -1,7 +1,8 @@
-# backend/app/graph/state.py
+# /backend/app/graph/state.py
 import operator
 from typing import Annotated, List, Dict, TypedDict, Optional, Any
 from pydantic import BaseModel, Field
+from app.models.schemas import CitationItem
 
 
 class ArticleInput(BaseModel):
@@ -39,13 +40,14 @@ class AttemptRecord(TypedDict):
 class MultiPaperState(TypedDict):
     arxiv_ids: List[str]
     user_instruction: str
-    mode: Optional[str]  # "fast" lub "exact"
+    mode: Optional[str]  
     expanded_keywords: Optional[List[str]]
-    papers_data: Dict[str, List[Dict[str, Any]]]
+    papers_data: Annotated[Dict[str, List[Dict[str, Any]]], operator.or_]
     papers_metadata: Dict[str, Dict[str, Any]]
     analysis_markdown: str
+    citations: List[Dict[str, Any]]
     verification_errors: List[str]
     judge_feedback: str
     retry_count: int
     is_valid: bool
-    audit_trail: List[AttemptRecord]
+    audit_trail: List[Dict[str, Any]]

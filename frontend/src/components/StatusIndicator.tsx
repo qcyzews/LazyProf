@@ -1,3 +1,4 @@
+// /frontend/src/components/StatusIndicator.tsx
 import React from 'react';
 import { StreamStatus } from '@/types';
 import { Loader2, Download, Cpu, Sparkles, Languages } from 'lucide-react';

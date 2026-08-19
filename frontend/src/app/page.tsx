@@ -1,8 +1,9 @@
+// /frontend/src/app/page.tsx
 'use client';
 
 import React, { useState, useRef } from 'react';
 import { ArticleMetadata, StreamStatus } from '@/types';
-import { searchArticles, analyzeArticlesStream, translateReportStream } from '@/lib/api';
+import { searchArticles, runGroundedAnalysisStream, translateReportStream } from '@/lib/api';
 import { ArticleCard } from '@/components/ArticleCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ReportViewer } from '@/components/ReportViewer';
@@ -13,7 +14,12 @@ import {
   AlertCircle,
   ArrowRight,
   BookOpenCheck,
+  Zap,
+  Cpu,
+  BrainCircuit,
 } from 'lucide-react';
+
+export type AnalysisMode = 'fast' | 'medium' | 'high';
 
 export default function Home() {
   // Stan zakładek: 'search' | 'report'
@@ -25,36 +31,47 @@ export default function Home() {
   const [searchResults, setSearchResults] = useState<ArticleMetadata[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [expandedQuery, setExpandedQuery] = useState<string | null>(null);
+  
 
-  // Koszyk
+  // Wybrane artykuły
   const [selectedArticles, setSelectedArticles] = useState<ArticleMetadata[]>([]);
 
-  // Instrukcja
+  // Config i Instrukcja użytkownika
   const [userInstruction, setUserInstruction] = useState(
     'Compare the RAG architectures proposed in these papers, highlighting their key contributions and comparative benchmarks in a summary table.'
   );
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('medium');
 
-  // Raport
+  // Raport i Strumieniowanie
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [reportMarkdown, setReportMarkdown] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
 
+  const [auditTrail, setAuditTrail] = useState<any[]>([]);
+  const [isValid, setIsValid] = useState<boolean | null>(null);
+
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const handleSearch = async (e?: React.FormEvent) => {
+    const handleSearch = async (e?: React.SyntheticEvent) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
 
     setIsSearching(true);
     setSearchError(null);
+    setExpandedQuery(null);
 
     try {
-      const results = await searchArticles(searchQuery, maxResults);
-      setSearchResults(results);
+      const res = await searchArticles(searchQuery, maxResults);
+    
+      // Pobieramy tablicę z pola `articles` zwracanego przez SearchService
+      setSearchResults(res?.articles ?? []);
+      setExpandedQuery(res?.expanded_query || null);
     } catch (err: any) {
       setSearchError(err.message || 'Failed to search articles.');
+      setSearchResults([]);
     } finally {
       setIsSearching(false);
     }
@@ -81,35 +98,74 @@ export default function Home() {
       return;
     }
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
     setIsAnalyzing(true);
     setStreamError(null);
     setReportMarkdown('');
-    setStatus({ step: 'downloading', message: 'Initializing pipeline...' });
+    setStatus({ step: 'downloading', message: `Initializing ${analysisMode.toUpperCase()} mode pipeline...` });
 
     abortControllerRef.current = new AbortController();
 
-    await analyzeArticlesStream(
-      selectedArticles,
-      userInstruction,
-      {
-        onStatus: (newStatus) => setStatus(newStatus),
-        onToken: (token) => setReportMarkdown((prev) => prev + token),
-        onComplete: () => {
-          setIsAnalyzing(false);
-          setStatus(null);
+    const arxivIds = selectedArticles.map((art) => art.arxiv_id);
+
+    try {
+      await runGroundedAnalysisStream(
+        {
+          arxiv_ids: arxivIds,
+          user_instruction: userInstruction,
+          mode: analysisMode,
         },
-        onError: (errMessage) => {
-          setIsAnalyzing(false);
-          setStatus(null);
-          setStreamError(errMessage);
+        {
+          onStatus: (newStatus) => {
+            setStatus(newStatus);
+            console.log('📌 [SSE Status]:', newStatus);
+          },
+          onToken: (token, resetStream) => {
+            setReportMarkdown((prev) => (resetStream ? token : prev + token));
+            console.log('📌 [SSE Token]:', token);
+          },
+          onReport: (report) => {
+            console.log('📌 [SSE Report]:', report);
+            if (report.analysis_markdown) {
+              setReportMarkdown(report.analysis_markdown); // Przypisuje finalny, czysty markdown
+            }
+            if (report.audit_trail) setAuditTrail(report.audit_trail);
+            if (typeof report.is_valid === 'boolean') setIsValid(report.is_valid);
+          },
+          onComplete: () => {
+            console.log('📌 [SSE Complete]:');
+            setIsAnalyzing(false);
+            setStatus(null);
+          },
+          onError: (errMessage) => {
+            console.error('📌 [SSE Error]:', errMessage);
+            setIsAnalyzing(false);
+            setStatus(null);
+            setStreamError(errMessage);
+          },
         },
-      },
-      abortControllerRef.current.signal
-    );
+        abortControllerRef.current.signal
+      );
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        setIsAnalyzing(false);
+        setStatus(null);
+        setStreamError(err.message || 'An error occurred during analysis.');
+      }
+    }
   };
 
   const handleTranslate = async () => {
-    if (!reportMarkdown) return;
+    // Sprawdzamy czy mamy treść do przetłumaczenia
+    const textToTranslate = reportMarkdown;
+    if (!textToTranslate) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
 
     setIsTranslating(true);
     setStreamError(null);
@@ -117,24 +173,54 @@ export default function Home() {
 
     abortControllerRef.current = new AbortController();
 
-    await translateReportStream(
-      reportMarkdown,
-      'Polish',
-      {
-        onStatus: (newStatus) => setStatus(newStatus),
-        onToken: (token) => setReportMarkdown((prev) => prev + token),
-        onComplete: () => {
-          setIsTranslating(false);
-          setStatus(null);
+    try {
+      await translateReportStream(
+        {
+          text: textToTranslate,
+          target_language: 'Polish',
+          audit_trail: auditTrail,
+          arxiv_ids: selectedArticles.map((art) => art.arxiv_id) ?? [],
+          is_valid: isValid ?? false,
         },
-        onError: (errMessage) => {
-          setIsTranslating(false);
-          setStatus(null);
-          setStreamError(errMessage);
+        {
+          onStatus: (newStatus) => {
+            setStatus(newStatus);
+            // Jeśli status niesie flagę resetStream, czyścimy widok tekstu
+            if (newStatus.resetStream) {
+              setReportMarkdown('');
+            }
+          },
+          onToken: (token, resetStream) => {
+            // Jeśli resetStream == true, zastępujemy tekst, w przeciwnym razie dopisujemy
+            setReportMarkdown((prev) => (resetStream ? token : prev + token));
+          },
+          onReport: (translatedReport) => {
+            // Podmieniamy pełny stan raportu z przetłumaczonym tekstem i metadanymi
+            const { analysis_markdown, audit_trail, is_valid } = translatedReport;
+            if (analysis_markdown) setReportMarkdown(analysis_markdown);
+            if (audit_trail) setAuditTrail(audit_trail);
+            if (typeof is_valid === 'boolean') setIsValid(is_valid);
+            //setReportMarkdown(translatedReport.analysis_markdown || translatedReport);
+          },
+          onComplete: () => {
+            setIsTranslating(false);
+            setStatus(null);
+          },
+          onError: (errMessage) => {
+            setIsTranslating(false);
+            setStatus(null);
+            setStreamError(errMessage);
+          },
         },
-      },
-      abortControllerRef.current.signal
-    );
+        abortControllerRef.current.signal
+      );
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        setIsTranslating(false);
+        setStatus(null);
+        setStreamError(err.message || 'An error occurred during translation.');
+      }
+    }
   };
 
   return (
@@ -148,11 +234,11 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 leading-none">LazyProf AI</h1>
-              <p className="text-xs text-slate-500 mt-0.5">Multi-Paper arXiv Synthesis & RAG Assistant</p>
+              <p className="text-xs text-slate-500 mt-0.5">Multi-Paper arXiv Synthesis & Grounded RAG</p>
             </div>
           </div>
 
-          {/* PASEK PRZEŁĄCZANIA ZAKŁADEK */}
+          {/* PRZEŁĄCZNIK ZAKŁADEK */}
           <div className="flex items-center rounded-lg bg-slate-100 p-1 border border-slate-200">
             <button
               onClick={() => setActiveTab('search')}
@@ -186,13 +272,12 @@ export default function Home() {
         </div>
       </header>
 
-      {/* GŁÓWNA TREŚĆ STRONY */}
+      {/* GŁÓWNA TREŚĆ */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* ================= ZAKŁADKA 1: WYSZUKIWANIE I SELEKCJA ================= */}
+        {/* ================= ZAKŁADKA 1: WYSZUKIWANIE ================= */}
         {activeTab === 'search' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-8 space-y-6">
-              {/* Formularz wyszukiwarki */}
               <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
                   <Search className="h-4 w-4 text-indigo-600" /> Search Research Papers on arXiv
@@ -226,6 +311,17 @@ export default function Home() {
                   </div>
                 </form>
 
+                {/* Wyświetlanie rozszerzonego zapytania */}
+                {expandedQuery && (
+                  <div className="mt-3 flex items-start gap-2 text-xs bg-indigo-50/80 text-indigo-900 p-3 rounded-lg border border-indigo-100">
+                    <Sparkles className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold">Expanded Query / Keywords:</span>
+                      <p className="mt-0.5 text-indigo-700 font-mono text-[11px]">{expandedQuery}</p>
+                    </div>
+                  </div>
+                )}
+
                 {searchError && (
                   <div className="mt-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 p-2.5 rounded-lg">
                     <AlertCircle className="h-4 w-4" />
@@ -234,28 +330,41 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Lista wyników */}
               <div className="space-y-4">
-                <div className="grid grid-cols-1 gap-4">
-                  {searchResults.map((article) => (
-                    <ArticleCard
-                      key={article.arxiv_id}
-                      article={article}
-                      isSelected={selectedArticles.some((a) => a.arxiv_id === article.arxiv_id)}
-                      onToggleSelect={toggleArticleSelection}
-                    />
-                  ))}
-                </div>
+                {searchResults.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4">
+                    {searchResults.map((article) => {
+                      const isSelected = selectedArticles.some(
+                        (item) => item.arxiv_id === article.arxiv_id
+                      );
+
+                      return (
+                        <ArticleCard
+                          key={article.arxiv_id}
+                          article={article}
+                          isSelected={isSelected}
+                          onToggleSelect={toggleArticleSelection} 
+                        />
+                      );
+                    })}
+                  </div>
+                ) : (
+                  !isSearching && (
+                    <div className="text-center py-8 text-slate-500 text-sm border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                      No articles found. Try adjusting your search query.
+                    </div>
+                  )
+                )}
               </div>
             </div>
 
-            {/* Boczny panel z podglądem koszyka */}
+            {/* Boczny panel koszyka */}
             <div className="lg:col-span-4 space-y-4">
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4 sticky top-24">
                 <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center justify-between">
                   <span>Selected Papers ({selectedArticles.length})</span>
                   {selectedArticles.length > 0 && (
-                    <button onClick={() => setSelectedArticles([])} className="text-xs text-red-600">
+                    <button onClick={() => setSelectedArticles([])} className="text-xs text-red-600 hover:underline">
                       Clear
                     </button>
                   )}
@@ -288,7 +397,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ================= ZAKŁADKA 2: SYNTEZA I PEŁNOWYMIAROWY RAPORT ================= */}
+        {/* ================= ZAKŁADKA 2: SYNTEZA I KONFIGURACJA ================= */}
         {activeTab === 'report' && (
           <div>
             {selectedArticles.length === 0 ? (
@@ -307,13 +416,13 @@ export default function Home() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Panel parametrów zapytania */}
-                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                {/* Panel parametrów i suwaka prędkości */}
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                     <div>
-                      <h2 className="text-base font-bold text-slate-900">Research Parameters & Prompt</h2>
+                      <h2 className="text-base font-bold text-slate-900">Research Parameters & Grounded RAG</h2>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Analyzing {selectedArticles.length} selected paper(s) with custom synthesis instructions.
+                        Analyzing {selectedArticles.length} selected paper(s) with multi-node validation pipeline.
                       </p>
                     </div>
 
@@ -324,6 +433,83 @@ export default function Home() {
                     >
                       <Sparkles className="h-4 w-4" /> Generate Report
                     </button>
+                  </div>
+
+                  {/* WYBÓR TRYBU / SUWAK (SPEED / DEPTH) */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-2 uppercase tracking-wide">
+                      Analysis Depth & Speed Mode (`SPEED_MODES`)
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {/* FAST */}
+                      <button
+                        type="button"
+                        onClick={() => setAnalysisMode('fast')}
+                        className={`flex flex-col text-left p-3.5 rounded-xl border transition-all ${
+                          analysisMode === 'fast'
+                            ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                            : 'border-slate-200 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full mb-1">
+                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            <Zap className="h-3.5 w-3.5 text-amber-500" /> Fast Mode
+                          </span>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                            flash-lite
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Smart chunks extraction, low reasoning depth. Best for quick overviews.
+                        </p>
+                      </button>
+
+                      {/* MEDIUM */}
+                      <button
+                        type="button"
+                        onClick={() => setAnalysisMode('medium')}
+                        className={`flex flex-col text-left p-3.5 rounded-xl border transition-all ${
+                          analysisMode === 'medium'
+                            ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                            : 'border-slate-200 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full mb-1">
+                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            <Cpu className="h-3.5 w-3.5 text-indigo-500" /> Medium Mode
+                          </span>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                            flash-lite + thinking
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Smart chunks with balanced thinking level. High accuracy vs speed ratio.
+                        </p>
+                      </button>
+
+                      {/* HIGH */}
+                      <button
+                        type="button"
+                        onClick={() => setAnalysisMode('high')}
+                        className={`flex flex-col text-left p-3.5 rounded-xl border transition-all ${
+                          analysisMode === 'high'
+                            ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                            : 'border-slate-200 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full mb-1">
+                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            <BrainCircuit className="h-3.5 w-3.5 text-purple-600" /> High Depth Mode
+                          </span>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                            gemini-3.5-flash
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Full paper context, maximum thinking level. Detailed cross-citation analysis.
+                        </p>
+                      </button>
+                    </div>
                   </div>
 
                   <div>
@@ -339,7 +525,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Wskaźnik statusu */}
+                {/* Wskaźnik postępu i pętli weryfikacji */}
                 <StatusIndicator status={status} />
 
                 {streamError && (
@@ -349,12 +535,14 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Główny pełnowymiarowy czytnik raportu */}
+                {/* Czytnik raportu Markdown */}
                 <ReportViewer
                   markdownText={reportMarkdown}
                   isStreaming={isAnalyzing || isTranslating}
                   onTranslate={handleTranslate}
                   isTranslating={isTranslating}
+                  selectedArticles={selectedArticles} // <-- DODAJ TO
+                  analysisMode={analysisMode}
                 />
               </div>
             )}

@@ -1,3 +1,4 @@
+// /frontend/src/components/ArticleCard.tsx
 import React from 'react';
 import { ArticleMetadata } from '@/types';
 import { ExternalLink, CheckCircle2, PlusCircle, Calendar, User } from 'lucide-react';

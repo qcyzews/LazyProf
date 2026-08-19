@@ -7,7 +7,9 @@ from app.services.arxiv_service import ArxivService
 MOCK_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
-    <title> Attention Is All You Need </title>
+    <id>http://arxiv.org/abs/1706.03762v7</id>
+    <title>Attention Is All You Need</title>
+    <summary>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks...</summary>
     <published>2017-06-12T17:57:34Z</published>
     <author><name>Ashish Vaswani</name></author>
     <author><name>Noam Shazeer</name></author>

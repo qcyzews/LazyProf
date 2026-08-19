@@ -1,20 +1,80 @@
+// /frontend/src/components/ReportViewer.tsx
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, Check, Languages, BookOpen, Download, FileText } from 'lucide-react';
+import { BookOpen, Languages, Copy, Check, FileText, Download, ExternalLink, Cpu } from 'lucide-react';
+import { ArticleMetadata, AnalysisMode } from '@/types';
 
 interface ReportViewerProps {
   markdownText: string;
   isStreaming: boolean;
   onTranslate?: () => void;
   isTranslating?: boolean;
+  selectedArticles?: ArticleMetadata[];
+  analysisMode?: AnalysisMode;
 }
+
+// --- Dedykowane style dla elementów Markdown ---
+const customMarkdownComponents = {
+  // 1. Zwiększone odstępy między punktami listy (rozwiązuje problem zlewającego się tekstu)
+  li: ({ children }: any) => (
+    <li className="mb-3.5 leading-relaxed text-slate-800 last:mb-0">
+      {children}
+    </li>
+  ),
+  // 2. Tabele z własnym przewijaniem, ramkami i poprawionym paddingiem
+  table: ({ children }: any) => (
+    <div className="my-6 overflow-x-auto rounded-lg border border-slate-200 shadow-2xs">
+      <table className="w-full text-left text-sm border-collapse">{children}</table>
+    </div>
+  ),
+  th: ({ children }: any) => (
+    <th className="border-b border-slate-200 bg-slate-100/80 px-4 py-3 font-semibold text-slate-800">
+      {children}
+    </th>
+  ),
+  td: ({ children }: any) => (
+    <td className="border-b border-slate-100 px-4 py-3 text-slate-700 align-top">
+      {children}
+    </td>
+  ),
+  // 3. Stylizacja cytatów / Raportu Rzetelności (niebieskie tło i wcięcie zamiast szarych kresek)
+  blockquote: ({ children }: any) => (
+    <blockquote className="my-4 rounded-r-lg border-l-4 border-indigo-500 bg-indigo-50/40 px-4 py-3 text-slate-700 not-italic prose-p:my-1">
+      {children}
+    </blockquote>
+  ),
+  // 4. Stylizacja linków (np. do PDF / arXiv)
+  a: ({ href, children }: any) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="font-medium text-indigo-600 underline underline-offset-2 hover:text-indigo-800 transition-colors"
+    >
+      {children}
+    </a>
+  ),
+  // 5. Stylizacja nagłówków
+  h2: ({ children }: any) => (
+    <h2 className="mt-8 mb-4 text-xl font-bold text-slate-900 border-b border-slate-100 pb-2">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }: any) => (
+    <h3 className="mt-6 mb-3 text-lg font-bold text-slate-800">
+      {children}
+    </h3>
+  ),
+};
 
 export const ReportViewer: React.FC<ReportViewerProps> = ({
   markdownText,
   isStreaming,
   onTranslate,
   isTranslating = false,
+  selectedArticles = [],
+  analysisMode,
 }) => {
   const [copied, setCopied] = React.useState(false);
 
@@ -75,11 +135,13 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-      {/* Pasek narzędziwy z przyciskami eksportu */}
+      {/* Pasek narzędziowy z przyciskami eksportu */}
       <div className="flex flex-wrap items-center justify-between border-b border-slate-100 bg-slate-50/80 px-6 py-3.5 gap-3">
         <div className="flex items-center gap-2">
-          <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Literature Synthesis Report</span>
+          <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+            Literature Synthesis Report
+          </span>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -121,10 +183,50 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
         </div>
       </div>
 
+      {/* Pasek metadanych raportu */}
+      {(selectedArticles.length > 0 || analysisMode) && (
+        <div className="bg-slate-50/50 border-b border-slate-100 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {analysisMode && (
+            <div className="flex items-center gap-1.5 text-slate-500">
+              <Cpu className="h-3.5 w-3.5 text-indigo-500" />
+              <span>Execution Mode:</span>
+              <span className="font-semibold text-slate-700 uppercase text-[10px] bg-slate-200/70 px-2 py-0.5 rounded-md tracking-wide">
+                {analysisMode}
+              </span>
+            </div>
+          )}
+
+          {selectedArticles.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-slate-500 font-medium">Grounded Papers ({selectedArticles.length}):</span>
+              <div className="flex flex-wrap gap-1.5 max-w-2xl">
+                {selectedArticles.map((art) => (
+                  <a
+                    key={art.arxiv_id}
+                    href={art.pdf_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={art.title}
+                    className="inline-flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded text-[11px] text-slate-700 hover:border-indigo-300 hover:text-indigo-600 transition-colors shadow-2xs"
+                  >
+                    <span className="font-mono text-slate-400">[{art.arxiv_id}]</span>
+                    <span className="truncate max-w-[140px] font-medium">{art.title}</span>
+                    <ExternalLink className="h-2.5 w-2.5 text-slate-400 shrink-0" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Wyświetlanie treści na pełną szerokość */}
       <div className="p-8 overflow-x-auto text-slate-800 leading-relaxed">
-        <div className="prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-slate-900 prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg prose-table:border-collapse prose-th:border prose-th:border-slate-200 prose-th:bg-slate-50 prose-th:p-3 prose-td:border prose-td:border-slate-200 prose-td:p-3">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <div className="prose prose-slate max-w-none prose-blockquote:not-italic prose-blockquote:font-normal">
+          <ReactMarkdown 
+            remarkPlugins={[remarkGfm]}
+            components={customMarkdownComponents}
+          >
             {markdownText}
           </ReactMarkdown>
         </div>

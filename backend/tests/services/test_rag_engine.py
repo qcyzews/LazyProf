@@ -1,16 +1,8 @@
-# /backend/tests/services/test_rag_engine.py
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from google.genai.errors import APIError
-
+from langchain_core.messages import SystemMessage, HumanMessage
 from app.services.rag_engine import RAGEngine
-
-
-# Tworzymy klasę pomocniczą do symulowania APIError bez budowania pełnego response_json
-class DummyAPIError(APIError):
-    def __init__(self, message="Google API Error"):
-        # Omijamy wywołanie super().__init__ z brakującym response_json
-        Exception.__init__(self, message)
+from app.graph.state import JudgeEvaluation
 
 
 @pytest.fixture
@@ -18,163 +10,201 @@ def rag_engine():
     """Tworzy instancję RAGEngine z zamockowanymi modelami LangChain."""
     with patch("app.services.rag_engine.ChatGoogleGenerativeAI"):
         engine = RAGEngine()
-        engine.map_llm = AsyncMock()
-        engine.reduce_llm = AsyncMock()
+        engine.map_llm = MagicMock()
+        engine.reduce_llm = MagicMock()
+        engine.judge_llm = MagicMock()
         return engine
 
 
-async def mock_async_generator(chunks):
+async def mock_async_generator(items):
     """Funkcja pomocnicza symulująca asynchroniczny generator dla astream."""
-    for chunk in chunks:
-        yield chunk
+    for item in items:
+        yield item
 
 
 # ============================================================================
-# TESTY: analyze_single_article (MAP STAGE)
+# TESTY METOD BUDUJĄCYCH PROMPTY (get_*_messages)
+# ============================================================================
+
+def test_get_map_messages(rag_engine):
+    """Testuje poprawność budowania wiadomości dla etapu MAP."""
+    messages = rag_engine.get_map_messages(
+        title="Attention Is All You Need",
+        arxiv_id="1706.03762",
+        user_instruction="Podsumuj architekturę Transformer",
+        text="Sample article content " * 1000
+    )
+
+    assert len(messages) == 2
+    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[1], HumanMessage)
+    assert "Attention Is All You Need" in messages[1].content
+    assert "1706.03762" in messages[1].content
+
+
+def test_get_reduce_messages_formatting_and_retry(rag_engine):
+    """Testuje formatowanie bloków kontekstu i sekcję poprawek (retry) w REDUCE."""
+    context_blocks = [
+        "Czysty tekst podsumowania",
+        {"arxiv_id": "111", "title": "Paper A", "summary": "Podsumowanie A"},
+        {"arxiv_id": "222", "title": "Paper B", "content": "Treść B"},
+        {"other_key": "custom_data"}  # Fallback do json.dumps
+    ]
+
+    # Test dla retry_count = 0 (bez błędów)
+    messages_normal = rag_engine.get_reduce_messages(
+        context_blocks=context_blocks,
+        user_instruction="Napisz przegląd literatury"
+    )
+    assert "CRITICAL CORRECTIONS REQUIRED" not in messages_normal[1].content
+    assert "### [arXiv:111] Paper A\nPodsumowanie A" in messages_normal[1].content
+
+    # Test dla retry_count > 0 z błędami weryfikacji
+    messages_retry = rag_engine.get_reduce_messages(
+        context_blocks=context_blocks,
+        user_instruction="Napisz przegląd literatury",
+        retry_count=1,
+        verification_errors=["Brak cytowania dla metryki X"],
+        judge_feedback="Uzupełnij brakujące dane"
+    )
+    assert "CRITICAL CORRECTIONS REQUIRED (Attempt 2)" in messages_retry[1].content
+    assert "Brak cytowania dla metryki X" in messages_retry[1].content
+    assert "Uzupełnij brakujące dane" in messages_retry[1].content
+
+
+def test_get_judge_messages(rag_engine):
+    """Testuje tworzenie wiadomości dla ewaluatora (Judge)."""
+    papers_data = {"1706.03762": {"title": "Transformer"}}
+    report_markdown = "# Raport końcowy\nTransfomer [arXiv:1706.03762] jest skuteczny."
+
+    messages = rag_engine.get_judge_messages(papers_data, report_markdown)
+
+    assert len(messages) == 2
+    assert "1706.03762" in messages[1].content
+    assert "# Raport końcowy" in messages[1].content
+
+
+# ============================================================================
+# TESTY WYWOŁAŃ MODELI LLM (run_*_llm)
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_analyze_single_article_success_string(rag_engine):
-    """Testuje udaną analizę artykułu gdy LLM zwraca zwykły tekst."""
-    mock_response = MagicMock()
-    mock_response.content = "Wyekstrahowane wnioski z artykułu."
-    rag_engine.map_llm.ainvoke.return_value = mock_response
+async def test_run_map_llm_various_responses(rag_engine):
+    """Testuje wywołanie map_llm dla odpowiedzi tekstowych i struktur typu list/dict."""
+    # Przypadek 1: Zwykły str
+    rag_engine.map_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Wynik MAP w tekście"))
+    result_str = await rag_engine.run_map_llm([])
+    assert result_str == "Wynik MAP w tekście"
 
-    result = await rag_engine.analyze_single_article("Treść artykułu", "Instrukcja")
-
-    assert result == "Wyekstrahowane wnioski z artykułu."
-    rag_engine.map_llm.ainvoke.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_analyze_single_article_success_list_dict(rag_engine):
-    """Testuje przypadek, gdy LLM zwraca odpowiedź w strukturze list[dict]."""
-    mock_response = MagicMock()
-    mock_response.content = [{"text": "Wniosek z listy dict"}]
-    rag_engine.map_llm.ainvoke.return_value = mock_response
-
-    result = await rag_engine.analyze_single_article("Treść", "Instrukcja")
-
-    assert result == "Wniosek z listy dict"
+    # Przypadek 2: Lista dictów z kluczem 'text'
+    rag_engine.map_llm.ainvoke = AsyncMock(return_value=MagicMock(content=[{"text": "Wynik z listy"}]))
+    result_list = await rag_engine.run_map_llm([])
+    assert result_list == "Wynik z listy"
 
 
 @pytest.mark.asyncio
-@patch("asyncio.sleep", new_callable=AsyncMock)
-async def test_analyze_single_article_retry_and_fail(mock_sleep, rag_engine):
-    """Testuje mechanizm ponawiania prób i ostateczny wyjątek."""
-    rag_engine.map_llm.ainvoke.side_effect = DummyAPIError("Błąd API Google")
+async def test_run_reduce_llm_various_responses(rag_engine):
+    """Testuje wywołanie reduce_llm i scalanie wyników."""
+    # Odpowiedź w postaci listy bloków
+    mock_content = [{"text": "Część 1. "}, {"text": "Część 2."}]
+    rag_engine.reduce_llm.ainvoke = AsyncMock(return_value=MagicMock(content=mock_content))
 
-    with pytest.raises(APIError):
-        await rag_engine.analyze_single_article("Tekst", "Instrukcja")
+    result = await rag_engine.run_reduce_llm([])
+    assert result == "Część 1. Część 2."
+
+
+@pytest.mark.asyncio
+async def test_run_judge_llm_success_and_fallback(rag_engine):
+    """Testuje działanie Judge LLM przy sukcesie oraz fallback w przypadku wyjątku."""
+    mock_structured = AsyncMock()
+    expected_eval = JudgeEvaluation(is_grounded=True, errors=[])
+    mock_structured.ainvoke.return_value = expected_eval
+    rag_engine.judge_llm.with_structured_output.return_value = mock_structured
+
+    # 1. Sukces
+    result = await rag_engine.run_judge_llm([])
+    assert result == expected_eval
+
+    # 2. Błąd w wywołaniu -> Oczekiwany fallback z domyślnym obiektem
+    mock_structured.ainvoke.side_effect = Exception("API Timeout")
+    fallback_result = await rag_engine.run_judge_llm([])
+    assert fallback_result.is_grounded is True
+    assert fallback_result.errors == []
 
 
 # ============================================================================
-# TESTY: run_map_stage_parallel
+# TESTY METOD PROCESU (run_map_stage_parallel, stream_*)
 # ============================================================================
 
 @pytest.mark.asyncio
 async def test_run_map_stage_parallel(rag_engine):
-    """Testuje równoległe przetwarzanie wielu artykułów w fazie MAP."""
-    with patch.object(rag_engine, "analyze_single_article", new_callable=AsyncMock) as mock_analyze:
-        mock_analyze.side_effect = ["Podsumowanie 1", "Podsumowanie 2"]
+    """Testuje równoległe przetwarzanie etapu MAP dla listy artykułów."""
+    with patch.object(rag_engine, "run_map_llm", new_callable=AsyncMock) as mock_run_map:
+        mock_run_map.side_effect = ["Podsumowanie Paper 1", "Podsumowanie Paper 2"]
 
         articles = [
             {"title": "Paper 1", "arxiv_id": "111", "text": "Tekst 1"},
             {"title": "Paper 2", "arxiv_id": "222", "text": "Tekst 2"},
         ]
 
-        summaries = await rag_engine.run_map_stage_parallel(articles, "Instrukcja")
+        results = await rag_engine.run_map_stage_parallel(articles, "Instrukcja użytkownika")
 
-        assert len(summaries) == 2
-        assert summaries[0] == {"title": "Paper 1", "arxiv_id": "111", "summary": "Podsumowanie 1"}
-        assert summaries[1] == {"title": "Paper 2", "arxiv_id": "222", "summary": "Podsumowanie 2"}
-
-
-# ============================================================================
-# TESTY: stream_reduce_stage (REDUCE STAGE)
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_stream_reduce_stage_various_chunk_types(rag_engine):
-    """Testuje strumieniowanie z różnymi typami danych w kawałkach (chunkach)."""
-    chunks = [
-        MagicMock(content=""),                              # Pusty chunk -> ignorowany
-        MagicMock(content="Fragment 1 "),                   # str
-        MagicMock(content=[{"text": "Fragment 2 "}]),       # list[dict]
-        MagicMock(content=["Fragment 3 "]),                 # list[str]
-        MagicMock(content=[123]),                           # list[inne]
-        MagicMock(content={"text": "Fragment 4 "}),         # dict z 'text'
-        MagicMock(content={"key": "val"}),                  # dict bez 'text'
-    ]
-
-    rag_engine.reduce_llm.astream = MagicMock(return_value=mock_async_generator(chunks))
-
-    map_summaries = [{"title": "Art 1", "arxiv_id": "001", "summary": "Sum 1"}]
-    collected_text = []
-
-    async for chunk in rag_engine.stream_reduce_stage(map_summaries, "Instrukcja"):
-        collected_text.append(chunk)
-
-    full_output = "".join(collected_text)
-    assert "Fragment 1" in full_output
-    assert "Fragment 2" in full_output
-    assert "Fragment 3" in full_output
-    assert "123" in full_output
-    assert "Fragment 4" in full_output
-    assert "{'key': 'val'}" in full_output
+        assert len(results) == 2
+        assert "### Paper: Paper 1 (arXiv:111)\nPodsumowanie Paper 1" in results[0]
+        assert "### Paper: Paper 2 (arXiv:222)\nPodsumowanie Paper 2" in results[1]
+        assert mock_run_map.call_count == 2
 
 
 @pytest.mark.asyncio
-@patch("asyncio.sleep", new_callable=AsyncMock)
-async def test_stream_reduce_stage_retry_and_fail(mock_sleep, rag_engine):
-    """Testuje obsługę błędów i ponawianie prób podczas strumieniowania REDUCE."""
-    async def failing_generator(messages):
-        raise DummyAPIError("Stream error")
-        yield
-
-    rag_engine.reduce_llm.astream = MagicMock(side_effect=failing_generator)
-    map_summaries = [{"title": "Art 1", "arxiv_id": "001", "summary": "Sum 1"}]
-
-    with pytest.raises(APIError):
-        async for _ in rag_engine.stream_reduce_stage(map_summaries, "Instrukcja"):
-            pass
-
-
-# ============================================================================
-# TESTY: stream_translation
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_stream_translation_success(rag_engine):
-    """Testuje strumieniowe tłumaczenie tekstu."""
+async def test_stream_reduce_stage(rag_engine):
+    """Testuje strumieniowanie z etapu REDUCE."""
     chunks = [
         MagicMock(content="Oto "),
-        MagicMock(content=[{"text": "przetłumaczony "}]),
-        MagicMock(content={"text": "tekst."}),
+        MagicMock(content="raport "),
+        MagicMock(content="końcowy."),
+        MagicMock(content="")  # Pusty chunk -> ignorowany
     ]
+    rag_engine.reduce_llm.astream.side_effect = lambda messages: mock_async_generator(chunks)
 
-    rag_engine.reduce_llm.astream = MagicMock(return_value=mock_async_generator(chunks))
+    collected = []
+    async for token in rag_engine.stream_reduce_stage(["Sum 1", "Sum 2"], "Instrukcja"):
+        collected.append(token)
 
-    translated_chunks = []
-    async for chunk in rag_engine.stream_translation("# Report", "Polish"):
-        translated_chunks.append(chunk)
-
-    assert "".join(translated_chunks) == "Oto przetłumaczony tekst."
+    assert "".join(collected) == "Oto raport końcowy."
 
 
 @pytest.mark.asyncio
-@patch("asyncio.sleep", new_callable=AsyncMock)
-async def test_stream_translation_retry_and_fail(mock_sleep, rag_engine):
-    """Testuje niepowodzenie tłumaczenia po wyczerpaniu limitu prób."""
-    async def failing_generator(messages):
-        raise Exception("Translation network glitch")
-        yield
+async def test_stream_translation_various_chunk_structures(rag_engine):
+    """Testuje strumieniowanie tłumaczenia dla różnych formatów chunków (stringi, listy, słowniki)."""
+    chunks = [
+        MagicMock(content="Tekst jako string. "),
+        MagicMock(content=["Tekst jako element listy. "]),
+        MagicMock(content=[{"type": "text", "text": "Tekst z dict w stylu Anthropic."}]),
+        MagicMock(content=None)  # Ignorowany
+    ]
+    rag_engine.reduce_llm.astream.side_effect = lambda messages: mock_async_generator(chunks)
 
-    rag_engine.reduce_llm.astream = MagicMock(side_effect=failing_generator)
+    output_chunks = []
+    async for chunk in rag_engine.stream_translation("# Report Markdown", "Polish"):
+        output_chunks.append(chunk)
 
-    with pytest.raises(Exception, match="Translation network glitch"):
-        async for _ in rag_engine.stream_translation("Text", "Polish"):
+    full_translation = "".join(output_chunks)
+    assert "Tekst jako string." in full_translation
+    assert "Tekst jako element listy." in full_translation
+    assert "Tekst z dict w stylu Anthropic." in full_translation
+
+
+@pytest.mark.asyncio
+async def test_stream_translation_error_handling(rag_engine):
+    """Testuje przekazywanie i logowanie błędów podczas tłumaczenia."""
+    def failing_generator(messages):
+        async def _gen():
+            raise RuntimeError("Błąd połączenia ze strumieniem LLM")
+            yield
+        return _gen()
+
+    rag_engine.reduce_llm.astream.side_effect = failing_generator
+
+    with pytest.raises(RuntimeError, match="Błąd połączenia ze strumieniem LLM"):
+        async for _ in rag_engine.stream_translation("# Report", "German"):
             pass
-
-    assert rag_engine.reduce_llm.astream.call_count == 3
-    assert mock_sleep.call_count == 2

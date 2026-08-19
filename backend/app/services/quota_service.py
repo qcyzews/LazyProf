@@ -1,4 +1,4 @@
-# backend/app/services/quota_service.py
+# /backend/app/services/quota_service.py
 import datetime
 import logging
 from typing import Dict, Any
@@ -15,6 +15,15 @@ except ImportError:
 
 
 class QuotaService:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Gwarantuje, że zawsze istnieje tylko jedna instancja tej klasy w pamięci."""
+        if cls._instance is None:
+            cls._instance = super(QuotaService, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
         # Limity RPM w pamięci (działają per-proces)
         self.limiters: Dict[str, AsyncLimiter] = {}

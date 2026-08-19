@@ -1,54 +1,54 @@
 # /backend/app/graph/workflow.py
 from langgraph.graph import END, START, StateGraph
-
-from app.graph.nodes import (
-    decide_next_step,
-    fetch_papers_node,
-    format_final_report_node,
-    generate_synthesis_node,
-    llm_judge_node,
-    python_verifier_node,
-    record_failed_attempt_node,
-)
+import app.graph.nodes as nodes
 from app.graph.state import MultiPaperState
 
-builder = StateGraph(MultiPaperState)
 
-# Rejestracja węzłów
-builder.add_node("fetch_papers", fetch_papers_node)
-builder.add_node("generate_synthesis", generate_synthesis_node)
-builder.add_node("python_verifier", python_verifier_node)
-builder.add_node("llm_judge", llm_judge_node)
-builder.add_node("record_failed_attempt", record_failed_attempt_node)
-builder.add_node("format_final_report", format_final_report_node)
+def create_workflow():
+    builder = StateGraph(MultiPaperState)
 
-# Definicja krawędzi statycznych
-builder.add_edge(START, "fetch_papers")
-builder.add_edge("fetch_papers", "generate_synthesis")
-builder.add_edge("generate_synthesis", "python_verifier")
-builder.add_edge("python_verifier", "llm_judge")
+    # Rejestracja węzłów poprzez moduł nodes (dzięki temu @patch zadziała)
+    builder.add_node("fetch_papers", nodes.fetch_papers_node)
+    builder.add_node("generate_synthesis", nodes.generate_synthesis_node)
+    builder.add_node("python_verifier", nodes.python_verifier_node)
+    builder.add_node("llm_judge", nodes.llm_judge_node)
+    builder.add_node("record_failed_attempt", nodes.record_failed_attempt_node)
+    builder.add_node("format_final_report", nodes.format_final_report_node)
 
-# Definicja krawędzi warunkowych
-builder.add_conditional_edges(
-    "llm_judge",
-    decide_next_step,
-    {
-        "record_and_retry": "record_failed_attempt",
-        "record_and_format": "record_failed_attempt",
-        "format_report": "format_final_report",
-    }
-)
+    # Krawędzie statyczne
+    builder.add_edge(START, "fetch_papers")
+    builder.add_edge("fetch_papers", "generate_synthesis")
+    builder.add_edge("generate_synthesis", "python_verifier")
+    builder.add_edge("python_verifier", "llm_judge")
 
-builder.add_conditional_edges(
-    "record_failed_attempt",
-    lambda state: "format_final_report" if state.get("retry_count", 0) >= 3 else "generate_synthesis",
-    {
-        "format_final_report": "format_final_report",
-        "generate_synthesis": "generate_synthesis"
-    }
-)
+    # Krawędzie warunkowe
+    builder.add_conditional_edges(
+        "llm_judge",
+        nodes.decide_next_step,
+        {
+            "record_and_retry": "record_failed_attempt",
+            "record_and_format": "record_failed_attempt",
+            "format_report": "format_final_report",
+        },
+    )
 
-builder.add_edge("format_final_report", END)
+    builder.add_conditional_edges(
+        "record_failed_attempt",
+        lambda state: (
+            "format_final_report"
+            if state.get("retry_count", 0) >= 3
+            else "generate_synthesis"
+        ),
+        {
+            "format_final_report": "format_final_report",
+            "generate_synthesis": "generate_synthesis",
+        },
+    )
 
-# Kompilacja grafu
-multi_paper_graph = builder.compile()
+    builder.add_edge("format_final_report", END)
+
+    return builder.compile()
+
+
+# Domyślna instancja dla aplikacji
+app_graph = create_workflow()
