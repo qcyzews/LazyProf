@@ -1,8 +1,9 @@
 # /backend/app/core/config.py
 import os
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, List, Union
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 load_dotenv()
 
@@ -11,7 +12,19 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     MAX_CONCURRENT_PDF_PARSES: int = 4
     ENABLE_DEBUG_DUMP: bool = os.getenv("ENABLE_DEBUG_DUMP", "False").lower() in ("true", "1", "yes")
-
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",") if i.strip()]
+        elif isinstance(v, (list, str)):
+            return v
+        raise ValueError(v)
+    
     # Modele Google Gemini
     MAP_MODEL: str = "gemini-3.1-flash-lite"  # Szybki i ultrawydajny model do etapu MAP
     REDUCE_MODEL: str = "gemini-3.5-flash"  # Zaawansowany model do głębokiej syntezy w REDUCE

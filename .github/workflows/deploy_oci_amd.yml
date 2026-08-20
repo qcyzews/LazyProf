@@ -76,7 +76,7 @@ jobs:
             --name lazyprof-backend \
             --restart always \
             --env-file .env \
-            -p 8000:8000 \
+            -p 127.0.0.1:8000:8000 \
             lazyprof-backend
 
           # 4. Usunięcie pliku .env z dysku runnera po uruchomieniu kontenera
