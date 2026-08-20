@@ -1,5 +1,6 @@
 # /backend/app/core/config.py
 import os
+import json
 from typing import Dict, Any, Literal, List, Union
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
