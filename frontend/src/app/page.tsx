@@ -121,14 +121,14 @@ export default function Home() {
         {
           onStatus: (newStatus) => {
             setStatus(newStatus);
-            console.log('📌 [SSE Status]:', newStatus);
+            //console.log('📌 [SSE Status]:', newStatus);
           },
           onToken: (token, resetStream) => {
             setReportMarkdown((prev) => (resetStream ? token : prev + token));
-            console.log('📌 [SSE Token]:', token);
+            //console.log('📌 [SSE Token]:', token);
           },
           onReport: (report) => {
-            console.log('📌 [SSE Report]:', report);
+            //console.log('📌 [SSE Report]:', report);
             if (report.analysis_markdown) {
               setReportMarkdown(report.analysis_markdown); // Przypisuje finalny, czysty markdown
             }
@@ -136,12 +136,12 @@ export default function Home() {
             if (typeof report.is_valid === 'boolean') setIsValid(report.is_valid);
           },
           onComplete: () => {
-            console.log('📌 [SSE Complete]:');
+            //console.log('📌 [SSE Complete]:');
             setIsAnalyzing(false);
             setStatus(null);
           },
           onError: (errMessage) => {
-            console.error('📌 [SSE Error]:', errMessage);
+            //console.error('📌 [SSE Error]:', errMessage);
             setIsAnalyzing(false);
             setStatus(null);
             setStreamError(errMessage);

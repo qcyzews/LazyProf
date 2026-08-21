@@ -176,20 +176,20 @@ async function handleSSEStream(
       },
 
       onmessage(msg) {
-        console.log('🔍 [RAW SSE MSG]:', {
-          event: msg.event,
-          data: msg.data
-        });
+        //console.log('🔍 [RAW SSE MSG]:', {
+        //  event: msg.event,
+        //  data: msg.data
+        //});
         if (!msg.data) return;
 
         try {
           const data = JSON.parse(msg.data);
-          console.log('🔍 [Parsed SSE Data]:', data);
+          //console.log('🔍 [Parsed SSE Data]:', data);
           // 1. Wykrywanie typu zdarzenia (sprawdzamy nagłówek SSE oraz wnętrze obiektu JSON)
           const eventType = msg.event
 
           // Log pomocniczy do weryfikacji w konsoli przeglądarki
-          console.log(`📡 [SSE Raw Message]: event='${eventType}'`, data);
+          //console.log(`📡 [SSE Raw Message]: event='${eventType}'`, data);
 
           switch (msg.event) {
             case 'status': {
@@ -238,7 +238,7 @@ async function handleSSEStream(
           }
         } catch (e) {
           console.error('Błąd parsowania zdarzenia SSE:', e);
-          console.log('📝 [RAW TEXT DATA]:', msg.data);
+          //console.log('📝 [RAW TEXT DATA]:', msg.data);
         }
       },
 
