@@ -3,7 +3,7 @@ name: LazyProf Frontend CI/CD
 on:
   push:
     branches:
-      - main # lub master
+      - main
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-ci-cd.yml'
@@ -13,14 +13,13 @@ on:
     paths:
       - 'frontend/**'
 
-defaults:
-  run:
-    working-directory: frontend
-
 jobs:
   test:
     name: Run Unit Tests & Lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
 
     steps:
       - name: Checkout repository
