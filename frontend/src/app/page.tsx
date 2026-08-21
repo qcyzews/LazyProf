@@ -7,6 +7,7 @@ import { searchArticles, runGroundedAnalysisStream, translateReportStream } from
 import { ArticleCard } from '@/components/ArticleCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ReportViewer } from '@/components/ReportViewer';
+import { About } from '@/components/About';
 import {
   Search,
   GraduationCap,
@@ -17,13 +18,13 @@ import {
   Zap,
   Cpu,
   BrainCircuit,
+  Info,
 } from 'lucide-react';
 
 export type AnalysisMode = 'fast' | 'medium' | 'high';
 
 export default function Home() {
-  // Stan zakładek: 'search' | 'report'
-  const [activeTab, setActiveTab] = useState<'search' | 'report'>('search');
+  const [activeTab, setActiveTab] = useState<'search' | 'report' | 'about'>('search');
 
   // Wyszukiwanie
   const [searchQuery, setSearchQuery] = useState('Retrieval Augmented Generation');
@@ -32,7 +33,6 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [expandedQuery, setExpandedQuery] = useState<string | null>(null);
-  
 
   // Wybrane artykuły
   const [selectedArticles, setSelectedArticles] = useState<ArticleMetadata[]>([]);
@@ -55,7 +55,7 @@ export default function Home() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
-    const handleSearch = async (e?: React.SyntheticEvent) => {
+  const handleSearch = async (e?: React.SyntheticEvent) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
 
@@ -65,8 +65,6 @@ export default function Home() {
 
     try {
       const res = await searchArticles(searchQuery, maxResults);
-    
-      // Pobieramy tablicę z pola `articles` zwracanego przez SearchService
       setSearchResults(res?.articles ?? []);
       setExpandedQuery(res?.expanded_query || null);
     } catch (err: any) {
@@ -108,7 +106,6 @@ export default function Home() {
     setStatus({ step: 'downloading', message: `Initializing ${analysisMode.toUpperCase()} mode pipeline...` });
 
     abortControllerRef.current = new AbortController();
-
     const arxivIds = selectedArticles.map((art) => art.arxiv_id);
 
     try {
@@ -119,29 +116,20 @@ export default function Home() {
           mode: analysisMode,
         },
         {
-          onStatus: (newStatus) => {
-            setStatus(newStatus);
-            //console.log('📌 [SSE Status]:', newStatus);
-          },
+          onStatus: (newStatus) => setStatus(newStatus),
           onToken: (token, resetStream) => {
             setReportMarkdown((prev) => (resetStream ? token : prev + token));
-            //console.log('📌 [SSE Token]:', token);
           },
           onReport: (report) => {
-            //console.log('📌 [SSE Report]:', report);
-            if (report.analysis_markdown) {
-              setReportMarkdown(report.analysis_markdown); // Przypisuje finalny, czysty markdown
-            }
+            if (report.analysis_markdown) setReportMarkdown(report.analysis_markdown);
             if (report.audit_trail) setAuditTrail(report.audit_trail);
             if (typeof report.is_valid === 'boolean') setIsValid(report.is_valid);
           },
           onComplete: () => {
-            //console.log('📌 [SSE Complete]:');
             setIsAnalyzing(false);
             setStatus(null);
           },
           onError: (errMessage) => {
-            //console.error('📌 [SSE Error]:', errMessage);
             setIsAnalyzing(false);
             setStatus(null);
             setStreamError(errMessage);
@@ -159,7 +147,6 @@ export default function Home() {
   };
 
   const handleTranslate = async () => {
-    // Sprawdzamy czy mamy treść do przetłumaczenia
     const textToTranslate = reportMarkdown;
     if (!textToTranslate) return;
 
@@ -185,22 +172,16 @@ export default function Home() {
         {
           onStatus: (newStatus) => {
             setStatus(newStatus);
-            // Jeśli status niesie flagę resetStream, czyścimy widok tekstu
-            if (newStatus.resetStream) {
-              setReportMarkdown('');
-            }
+            if (newStatus.resetStream) setReportMarkdown('');
           },
           onToken: (token, resetStream) => {
-            // Jeśli resetStream == true, zastępujemy tekst, w przeciwnym razie dopisujemy
             setReportMarkdown((prev) => (resetStream ? token : prev + token));
           },
           onReport: (translatedReport) => {
-            // Podmieniamy pełny stan raportu z przetłumaczonym tekstem i metadanymi
             const { analysis_markdown, audit_trail, is_valid } = translatedReport;
             if (analysis_markdown) setReportMarkdown(analysis_markdown);
             if (audit_trail) setAuditTrail(audit_trail);
             if (typeof is_valid === 'boolean') setIsValid(is_valid);
-            //setReportMarkdown(translatedReport.analysis_markdown || translatedReport);
           },
           onComplete: () => {
             setIsTranslating(false);
@@ -225,10 +206,10 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-16">
-      {/* NAGŁÓWEK APLIKACJI */}
+      {/* HEADER */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('search')}>
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-md shadow-indigo-200">
               <GraduationCap className="h-6 w-6" />
             </div>
@@ -238,7 +219,7 @@ export default function Home() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK ZAKŁADEK */}
+          {/* TAB CONTROLS */}
           <div className="flex items-center rounded-lg bg-slate-100 p-1 border border-slate-200">
             <button
               onClick={() => setActiveTab('search')}
@@ -268,13 +249,25 @@ export default function Home() {
               <BookOpenCheck className="h-3.5 w-3.5" />
               2. Synthesis Report
             </button>
+
+            <button
+              onClick={() => setActiveTab('about')}
+              className={`inline-flex items-center gap-2 rounded-md px-4 py-1.5 text-xs font-semibold transition-all ${
+                activeTab === 'about'
+                  ? 'bg-white text-indigo-600 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Info className="h-3.5 w-3.5" />
+              About & Architecture
+            </button>
           </div>
         </div>
       </header>
 
-      {/* GŁÓWNA TREŚĆ */}
+      {/* MAIN CONTENT CONTAINER */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* ================= ZAKŁADKA 1: WYSZUKIWANIE ================= */}
+        {/* TAB 1: SEARCH */}
         {activeTab === 'search' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-8 space-y-6">
@@ -311,7 +304,6 @@ export default function Home() {
                   </div>
                 </form>
 
-                {/* Wyświetlanie rozszerzonego zapytania */}
                 {expandedQuery && (
                   <div className="mt-3 flex items-start gap-2 text-xs bg-indigo-50/80 text-indigo-900 p-3 rounded-lg border border-indigo-100">
                     <Sparkles className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
@@ -337,13 +329,12 @@ export default function Home() {
                       const isSelected = selectedArticles.some(
                         (item) => item.arxiv_id === article.arxiv_id
                       );
-
                       return (
                         <ArticleCard
                           key={article.arxiv_id}
                           article={article}
                           isSelected={isSelected}
-                          onToggleSelect={toggleArticleSelection} 
+                          onToggleSelect={toggleArticleSelection}
                         />
                       );
                     })}
@@ -358,7 +349,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Boczny panel koszyka */}
             <div className="lg:col-span-4 space-y-4">
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4 sticky top-24">
                 <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center justify-between">
@@ -397,7 +387,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ================= ZAKŁADKA 2: SYNTEZA I KONFIGURACJA ================= */}
+        {/* TAB 2: SYNTHESIS REPORT */}
         {activeTab === 'report' && (
           <div>
             {selectedArticles.length === 0 ? (
@@ -416,7 +406,6 @@ export default function Home() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Panel parametrów i suwaka prędkości */}
                 <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                     <div>
@@ -435,13 +424,11 @@ export default function Home() {
                     </button>
                   </div>
 
-                  {/* WYBÓR TRYBU / SUWAK (SPEED / DEPTH) */}
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-2 uppercase tracking-wide">
                       Analysis Depth & Speed Mode (`SPEED_MODES`)
                     </label>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {/* FAST */}
                       <button
                         type="button"
                         onClick={() => setAnalysisMode('fast')}
@@ -464,7 +451,6 @@ export default function Home() {
                         </p>
                       </button>
 
-                      {/* MEDIUM */}
                       <button
                         type="button"
                         onClick={() => setAnalysisMode('medium')}
@@ -487,7 +473,6 @@ export default function Home() {
                         </p>
                       </button>
 
-                      {/* HIGH */}
                       <button
                         type="button"
                         onClick={() => setAnalysisMode('high')}
@@ -525,7 +510,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Wskaźnik postępu i pętli weryfikacji */}
                 <StatusIndicator status={status} />
 
                 {streamError && (
@@ -535,19 +519,21 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Czytnik raportu Markdown */}
                 <ReportViewer
                   markdownText={reportMarkdown}
                   isStreaming={isAnalyzing || isTranslating}
                   onTranslate={handleTranslate}
                   isTranslating={isTranslating}
-                  selectedArticles={selectedArticles} // <-- DODAJ TO
+                  selectedArticles={selectedArticles}
                   analysisMode={analysisMode}
                 />
               </div>
             )}
           </div>
         )}
+
+        {/* TAB 3: ABOUT (Komponent wyizolowany) */}
+        {activeTab === 'about' && <About />}
       </main>
     </div>
   );
