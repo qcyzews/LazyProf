@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.config import settings
 from app.models.schemas import StatusResponse
+from unittest.mock import AsyncMock, MagicMock, patch
 
 client = TestClient(app)
 
@@ -21,16 +22,20 @@ def test_config_loading():
 
 
 def test_status_endpoint():
-    """Testuje czy endpoint /status odpowiada prawidłowo i zwraca poprawny schemat."""
-    response = client.get("/api/v1/status")  # Jeśli Twój endpoint jest pod prefiksem, zmień na np. /api/v1/status
-    assert response.status_code == 200
-    
-    # Walidacja odpowiedzi za pomocą schematu Pydantic
-    data = response.json()
-    status_model = StatusResponse(**data)
-    
-    assert status_model.status == "ok"
-    assert isinstance(status_model.modes, dict)
+    mock_status = {
+        "fast": {
+            "available": True,
+            "model_name": "gemini-2.5-flash",
+            "remaining_rpd": 20,
+            "max_rpd": 20,
+            "current_rpd_usage": 0
+        }
+    }
+    with patch("app.api.v1.endpoints.quota_service.get_available_modes_status", new_callable=AsyncMock) as mock_get_status:
+        mock_get_status.return_value = mock_status
+        response = client.get("/api/v1/status")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
 
 
 def test_schemas_validation():

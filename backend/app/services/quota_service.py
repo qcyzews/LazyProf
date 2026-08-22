@@ -1,5 +1,5 @@
 # /backend/app/services/quota_service.py
-import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Dict, Any, Tuple
 from aiolimiter import AsyncLimiter
@@ -49,7 +49,7 @@ class QuotaService:
         self._initialized = True
 
     def _get_time_keys(self, model_name: str) -> Tuple[str, str, str]:
-        now = datetime.datetime.utcnow()
+        now = datetime.now(timezone.utc)
         min_str = now.strftime("%Y%m%d%H%M")
         day_str = now.strftime("%Y%m%d")
         return (

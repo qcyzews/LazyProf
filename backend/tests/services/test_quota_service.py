@@ -1,26 +1,30 @@
 # backend/tests/services/test_quota_service.py
 import pytest
-import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-
 from app.services.quota_service import QuotaService
 
 
+@pytest.fixture(autouse=True)
+def reset_quota_singleton():
+    """Resetuje stan singletonu QuotaService przed i po każdym teście."""
+    QuotaService._instance = None
+    yield
+    QuotaService._instance = None
+
+
 # ============================================================================
-# TESTY: Inicjalizacja QuotaService
+# Inicjalizacja
 # ============================================================================
 
 def test_quota_service_init_missing_redis_import_raises_error():
-    """Testuje wyrzucenie ImportError przy braku pakiety redis w trybie redis."""
     with patch("app.services.quota_service.redis", None):
         with patch("app.core.config.settings.QUOTA_BACKEND", "redis"):
             with pytest.raises(ImportError) as exc_info:
                 QuotaService()
-            assert "Brak pakiety 'redis'" in str(exc_info.value)
+            assert "Brak pakietu 'redis'" in str(exc_info.value)
 
 
 def test_quota_service_init_redis_backend_success():
-    """Testuje poprawną inicjalizację klienta Redis w trybie redis."""
     mock_redis = MagicMock()
     with patch("app.services.quota_service.redis", mock_redis):
         with patch("app.core.config.settings.QUOTA_BACKEND", "redis"):
@@ -30,7 +34,6 @@ def test_quota_service_init_redis_backend_success():
 
 
 def test_quota_service_init_memory_backend():
-    """Testuje inicjalizację w domyślnym trybie pamięciowym."""
     with patch("app.core.config.settings.QUOTA_BACKEND", "in_memory"):
         service = QuotaService()
         assert service.backend_type == "in_memory"
@@ -38,123 +41,146 @@ def test_quota_service_init_memory_backend():
 
 
 # ============================================================================
-# TESTY: check_and_increment_rpd (Redis Backend)
+# check_availability
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_check_and_increment_rpd_redis_first_call_sets_ttl():
-    """Testuje, czy przy pierwszym zapytaniu w dniu (count == 1) wywoływana jest metoda expire."""
-    service = QuotaService()
-    service.backend_type = "redis"
-    mock_redis = AsyncMock()
-    mock_redis.incr.return_value = 1
-    service._redis_client = mock_redis
-
-    res = await service.check_and_increment_rpd("gemini-2.5-flash")
-
-    assert res is True
-    mock_redis.incr.assert_called_once()
-    mock_redis.expire.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_check_and_increment_rpd_redis_limit_exceeded():
-    """Testuje przekroczenie limitu RPD w trybie Redis."""
-    service = QuotaService()
-    service.backend_type = "redis"
-    mock_redis = AsyncMock()
-    mock_redis.incr.return_value = 1000  # Przekroczenie limitu
-    service._redis_client = mock_redis
-
-    res = await service.check_and_increment_rpd("gemini-2.5-flash")
-
-    assert res is False
-
-
-# ============================================================================
-# TESTY: check_and_increment_rpd (In-Memory Backend)
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_check_and_increment_rpd_memory_success_and_increment():
-    """Testuje sukces i inkrementację licznika w trybie pamięciowym."""
+async def test_check_availability_memory_success():
     service = QuotaService()
     service.backend_type = "in_memory"
+    service._in_memory_tracker = {}
 
-    model_name = "test-model-unique"
-    res = await service.check_and_increment_rpd(model_name)
-
-    assert res is True
-    assert service._in_memory_tracker[model_name]["count"] == 1
+    ok, msg = await service.check_availability("gemini-2.5-flash", estimated_tokens=1000)
+    assert ok is True
+    assert msg == "OK"
 
 
 @pytest.mark.asyncio
-async def test_check_and_increment_rpd_memory_limit_exceeded():
-    """Testuje odrzucenie zapytania po osiągnięciu max_rpd w trybie pamięciowym."""
+async def test_check_availability_memory_rpm_exceeded():
     service = QuotaService()
     service.backend_type = "in_memory"
-    today = str(datetime.date.today())
+    rpm_key, _, _ = service._get_time_keys("gemini-2.5-flash")
+    service._in_memory_tracker[rpm_key] = 100
 
-    model_name = "test-model-limit"
-    # Sztuczne ustawienie maksymalnej liczby zapytań
-    service._in_memory_tracker[model_name] = {"date": today, "count": 20}
-
-    res = await service.check_and_increment_rpd(model_name)
-
-    assert res is False
-    assert service._in_memory_tracker[model_name]["count"] == 20
+    ok, msg = await service.check_availability("gemini-2.5-flash")
+    assert ok is False
+    assert "limit RPM" in msg
 
 
 @pytest.mark.asyncio
-async def test_check_and_increment_rpd_memory_date_rollover():
-    """Testuje resetowanie licznika pamięciowego po zmianie dnia."""
+async def test_check_availability_memory_tpm_exceeded():
     service = QuotaService()
     service.backend_type = "in_memory"
+    _, tpm_key, _ = service._get_time_keys("gemini-2.5-flash")
+    service._in_memory_tracker[tpm_key] = 249_000
 
-    model_name = "test-model-rollover"
-    # Zapisan ze starą datą
-    service._in_memory_tracker[model_name] = {"date": "2020-01-01", "count": 20}
+    ok, msg = await service.check_availability("gemini-2.5-flash", estimated_tokens=2000)
+    assert ok is False
+    assert "limit TPM" in msg
 
-    res = await service.check_and_increment_rpd(model_name)
-
-    assert res is True
-    assert service._in_memory_tracker[model_name]["count"] == 1
-    assert service._in_memory_tracker[model_name]["date"] == str(datetime.date.today())
-
-
-# ============================================================================
-# TESTY: get_available_modes_status
-# ============================================================================
 
 @pytest.mark.asyncio
-async def test_get_available_modes_status_redis_backend():
-    """Testuje pobieranie statusów trybów z backendu Redis."""
+async def test_check_availability_memory_rpd_exceeded():
+    service = QuotaService()
+    service.backend_type = "in_memory"
+    _, _, rpd_key = service._get_time_keys("gemini-2.5-flash")
+    service._in_memory_tracker[rpd_key] = 50
+
+    ok, msg = await service.check_availability("gemini-2.5-flash")
+    assert ok is False
+    assert "limit RPD" in msg
+
+
+@pytest.mark.asyncio
+async def test_check_availability_redis_success():
     service = QuotaService()
     service.backend_type = "redis"
-    mock_redis = AsyncMock()
-    mock_redis.get.side_effect = lambda key: "5" if "flash" in key else None
+
+    mock_pipe = MagicMock()
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_pipe.execute = AsyncMock(return_value=["1", "500", "5"])
+
+    mock_redis = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
     service._redis_client = mock_redis
 
-    status = await service.get_available_modes_status()
+    ok, msg = await service.check_availability("gemini-2.5-flash", estimated_tokens=1000)
+    assert ok is True
+    assert msg == "OK"
+    assert mock_pipe.get.call_count == 3
 
-    assert isinstance(status, dict)
-    assert len(status) > 0
 
+# ============================================================================
+# record_successful_call
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_record_successful_call_memory():
+    service = QuotaService()
+    service.backend_type = "in_memory"
+    service._in_memory_tracker = {}
+
+    model_name = "gemini-2.5-flash"
+    await service.record_successful_call(model_name, input_tokens=100, output_tokens=200)
+
+    rpm_key, tpm_key, rpd_key = service._get_time_keys(model_name)
+    assert service._in_memory_tracker[rpm_key] == 1
+    assert service._in_memory_tracker[tpm_key] == 300
+    assert service._in_memory_tracker[rpd_key] == 1
+
+
+@pytest.mark.asyncio
+async def test_record_successful_call_redis():
+    service = QuotaService()
+    service.backend_type = "redis"
+
+    mock_pipe = MagicMock()
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_pipe.execute = AsyncMock(return_value=None)
+
+    mock_redis = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
+    service._redis_client = mock_redis
+
+    await service.record_successful_call("gemini-2.5-flash", input_tokens=50, output_tokens=50)
+
+    assert mock_pipe.incr.call_count >= 2
+    assert mock_pipe.incrby.call_count >= 2
+    assert mock_pipe.expire.call_count == 3
+    mock_pipe.execute.assert_called_once()
+
+
+# ============================================================================
+# get_available_modes_status
+# ============================================================================
 
 @pytest.mark.asyncio
 async def test_get_available_modes_status_memory_backend():
-    """Testuje pobieranie statusów trybów z backendu In-Memory (z uwzględnieniem starych wpisów)."""
     service = QuotaService()
     service.backend_type = "in_memory"
-    today = str(datetime.date.today())
-
-    # Zasilamy tracker jednym nowym i jednym przestarzałym wpisem
-    service._in_memory_tracker = {
-        "gemini-2.5-flash": {"date": today, "count": 10},
-        "gemini-2.5-pro": {"date": "2020-01-01", "count": 18}
-    }
+    service._in_memory_tracker = {}
 
     status = await service.get_available_modes_status()
-
     assert isinstance(status, dict)
     assert len(status) > 0
+    for mode_data in status.values():
+        assert "available" in mode_data
+        assert "remaining_rpd" in mode_data
+
+
+@pytest.mark.asyncio
+async def test_get_available_modes_status_redis_backend():
+    service = QuotaService()
+    service.backend_type = "redis"
+
+    mock_redis = MagicMock()
+    mock_redis.get = AsyncMock(return_value="3")
+    service._redis_client = mock_redis
+
+    status = await service.get_available_modes_status()
+    assert isinstance(status, dict)
+    assert len(status) > 0
+    for mode_data in status.values():
+        assert mode_data["current_rpd_usage"] == 3

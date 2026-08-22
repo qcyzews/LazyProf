@@ -1,6 +1,6 @@
 # /backend/tests/services/test_arxiv_service.py
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from app.services.arxiv_service import ArxivService
 
 # Przykładowy XML z API arXiv
@@ -20,10 +20,10 @@ MOCK_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
 @pytest.mark.asyncio
 async def test_fetch_paper_metadata_success():
     """Testuje poprawne parsowanie odpowiedzi XML z API arXiv."""
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.text = MOCK_ARXIV_XML
-    mock_response.raise_for_status = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
 
     with patch("httpx.AsyncClient.get", return_value=mock_response):
         metadata = await ArxivService.fetch_paper_metadata("1706.03762")

@@ -38,12 +38,12 @@ router = APIRouter()
 class MultiPaperGroundedRequest(BaseModel):
     arxiv_ids: List[str] = Field(
         ..., 
-        example=["1706.03762", "2106.09685"], 
+        json_schema_extra={"example": ["1706.03762", "2106.09685"]}, 
         description="Lista identyfikatorów arXiv do analizy"
     )
     user_instruction: str = Field(
         ..., 
-        example="Porównaj architekturę i wyniki opisane w artykułach.",
+        json_schema_extra={"example": "Porównaj architekturę i wyniki opisane w artykułach."},
         description="Zapytanie lub instrukcja dla agenta"
     )
     mode: Optional[str] = "fast"  
