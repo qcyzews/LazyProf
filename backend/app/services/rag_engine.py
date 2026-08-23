@@ -4,11 +4,13 @@ import json
 import logging
 from typing import AsyncGenerator, List, Dict, Any, Optional, Union
 from langchain_google_genai import ChatGoogleGenerativeAI
+from google.api_core.exceptions import ResourceExhausted
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.config import settings
 from app.graph.state import JudgeEvaluation
 from app.services.quota_service import quota_service
-from app.services.llm_service import safe_llm_invoke
+from app.services.llm_service import safe_llm_invoke, extract_text_from_llm_response
+from app.models.schemas import QueryExpansionResponse
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +108,46 @@ class RAGEngine:
     
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
 
+    def get_judge_messages(self, papers_data: Dict[str, Any], report_markdown: str) -> List[Any]:
+
+        system_prompt = (
+
+            "You are a strict academic verifier. Verify if the generated synthesis report is fully grounded "
+
+            "in the provided source paper analyses."
+
+        )
+
+        user_prompt = f"""
+
+SOURCE DATA:
+
+{json.dumps(papers_data, indent=2)}
+
+
+
+GENERATED REPORT:
+
+{report_markdown}
+
+
+
+Verify if:
+
+1. Every claim cited with [arXiv:ID] is accurately supported by that specific paper's source data.
+
+2. No hallucinated benchmarks, metrics, or non-existent authors/papers are introduced.
+
+"""
+
+        return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+
     # --- BEZPIECZNE METODY ZINTEGROWANE Z QUOTĄ ---
 
     async def run_map_llm(self, messages: List[Any]) -> str:
         response = await safe_llm_invoke(self.map_model_name, self.map_llm, messages)
-        content = response.content
-        if isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict):
-            return content[0].get("text", str(content))
-        return str(content)
+        content = getattr(response, "content", response)
+        return extract_text_from_llm_response(content)
 
     async def run_reduce_llm(self, messages: List[Any]) -> str:
         response = await safe_llm_invoke(self.reduce_model_name, self.reduce_llm, messages)
@@ -173,7 +207,7 @@ class RAGEngine:
     async def stream_translation(self, markdown_text: str, target_language: str) -> AsyncGenerator[str, None]:
         is_ok, msg = await quota_service.check_availability(self.reduce_model_name)
         if not is_ok:
-            raise RuntimeError(f"Limit Gemini zablokowany: {msg}")
+            raise RuntimeError(f"QUOTA_EXHAUSTED: {msg}")
 
         system_prompt = (
             f"You are a professional scientific translator. Translate the provided Markdown report into {target_language}.\n"
@@ -183,14 +217,16 @@ class RAGEngine:
             "3. Keep technical terms accurate and natural in {target_language}."
         )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=markdown_text)]
-        
+    
         total_tokens_approx = 0
+        input_tokens_approx = len(markdown_text.split())
+    
         try:
             async for chunk in self.reduce_llm.astream(messages):
                 content = chunk.content
                 if not content:
                     continue
-                
+            
                 if isinstance(content, str):
                     total_tokens_approx += len(content.split())
                     yield content
@@ -200,12 +236,21 @@ class RAGEngine:
                         if text:
                             total_tokens_approx += len(text.split())
                             yield text
-        finally:
+
+            # Rejestrujemy sukces tylko, gdy cały stream przeszedł bez błędu
             await quota_service.record_successful_call(
                 self.reduce_model_name,
-                input_tokens=len(markdown_text.split()),
+                input_tokens=input_tokens_approx,
                 output_tokens=total_tokens_approx
             )
+
+        except (ResourceExhausted, Exception) as exc:
+            err_msg = str(exc)
+            if isinstance(exc, ResourceExhausted) or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                await quota_service.record_429(self.reduce_model_name)
+                raise RuntimeError(f"QUOTA_EXHAUSTED: Przekroczono limit zapytań (429) dla modelu {self.reduce_model_name}") from exc
+            raise
+
 
     def get_model_for_mode(self, mode_key: str = "fast", temperature: float = 0.1) -> tuple[ChatGoogleGenerativeAI, str]:
         """Tworzy instancję ChatGoogleGenerativeAI skonfigurowaną pod dany tryb prędkości."""

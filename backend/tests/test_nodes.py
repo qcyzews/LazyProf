@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from app.graph.nodes import (
-    extract_text_from_llm_response,
     build_xml_grounded_context,
     decide_next_step,
     expand_query_node,
@@ -17,6 +16,7 @@ from app.graph.nodes import (
 )
 from app.models.schemas import SynthesisResponse
 from app.graph.state import JudgeEvaluation
+from app.services.llm_service import extract_text_from_llm_response
 
 
 # --- TESTY FUNKCJI POMOCNICZYCH (HELPERS) ---
@@ -81,7 +81,7 @@ def test_decide_next_step():
 # --- TESTY WĘZŁÓW GRAFU (NODES) ---
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.expand_keywords_with_llm", new_callable=AsyncMock)
+@patch("app.graph.nodes.rag_engine.expand_keywords", new_callable=AsyncMock)
 async def test_expand_query_node(mock_expand):
     mock_expand.return_value = ["synonym1", "synonym2"]
     state = {"user_instruction": "test query", "mode": "fast"}
@@ -93,8 +93,8 @@ async def test_expand_query_node(mock_expand):
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.PDFService.extract_pages_from_url", new_callable=AsyncMock)
-@patch("app.graph.nodes.ArxivService.fetch_paper_metadata", new_callable=AsyncMock)
+@patch("app.services.pdf_service.PDFService.extract_pages_from_url", new_callable=AsyncMock)
+@patch("app.services.arxiv_service.ArxivService.fetch_paper_metadata", new_callable=AsyncMock)
 async def test_fetch_papers_node_success(mock_meta, mock_pdf):
     mock_pdf.return_value = [{"page": 1, "text": "Strona 1"}]
     mock_meta.return_value = {"title": "Test Paper", "authors": ["Jan Kowalski"], "published": "2026-01-01", "pdf_url": "url"}
@@ -108,8 +108,8 @@ async def test_fetch_papers_node_success(mock_meta, mock_pdf):
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.PDFService.extract_pages_from_url", new_callable=AsyncMock)
-@patch("app.graph.nodes.ArxivService.fetch_paper_metadata", new_callable=AsyncMock)
+@patch("app.services.pdf_service.PDFService.extract_pages_from_url", new_callable=AsyncMock)
+@patch("app.services.arxiv_service.ArxivService.fetch_paper_metadata", new_callable=AsyncMock)
 async def test_fetch_papers_node_all_failed(mock_meta, mock_pdf):
     mock_pdf.return_value = [] # puste strony oznaczają błąd pobierania
     mock_meta.return_value = {}
@@ -124,7 +124,7 @@ async def test_fetch_papers_node_all_failed(mock_meta, mock_pdf):
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.get_model_for_mode")
+@patch("app.graph.nodes.rag_engine.get_model_for_mode")
 @patch("app.graph.nodes.safe_llm_invoke", new_callable=AsyncMock)
 @patch("app.graph.nodes.get_prepared_context", new_callable=AsyncMock)
 async def test_generate_synthesis_node(mock_context, mock_safe_invoke, mock_get_model):
@@ -139,8 +139,8 @@ async def test_generate_synthesis_node(mock_context, mock_safe_invoke, mock_get_
         citations=[
             {
                 "arxiv_id": "2601.05264",
-                "page": "1",  # Zmiana int -> str
-                "claim_summary": "Podsumowanie twierdzenia",  # Dodanie wymaganego pola
+                "page": "1",
+                "claim_summary": "Podsumowanie twierdzenia",
             }
         ],
     )
@@ -161,7 +161,7 @@ async def test_generate_synthesis_node(mock_context, mock_safe_invoke, mock_get_
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.CitationVerifier.extract_and_verify_citations")
+@patch("app.services.citation_service.CitationVerifier.extract_and_verify_citations")
 async def test_python_verifier_node(mock_verifier):
     mock_verifier.return_value = {"is_valid": True, "errors": []}
     
@@ -173,7 +173,7 @@ async def test_python_verifier_node(mock_verifier):
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.get_model_for_mode")
+@patch("app.graph.nodes.rag_engine.get_model_for_mode")
 @patch("app.graph.nodes.safe_llm_invoke", new_callable=AsyncMock)
 @patch("app.graph.nodes.get_prepared_context", new_callable=AsyncMock)
 async def test_llm_judge_node_valid(mock_context, mock_safe_invoke, mock_get_model):
@@ -194,7 +194,7 @@ async def test_llm_judge_node_valid(mock_context, mock_safe_invoke, mock_get_mod
 
 
 @pytest.mark.asyncio
-@patch("app.graph.nodes.get_model_for_mode")
+@patch("app.graph.nodes.rag_engine.get_model_for_mode")
 @patch("app.graph.nodes.safe_llm_invoke", new_callable=AsyncMock)
 @patch("app.graph.nodes.get_prepared_context", new_callable=AsyncMock)
 @patch("app.services.debug_service.debug_service.log_failed_audit_async", new_callable=AsyncMock)

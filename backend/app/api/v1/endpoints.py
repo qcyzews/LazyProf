@@ -188,7 +188,6 @@ async def analyze_and_stream(payload: AnalyzeRequest):
 async def translate_and_stream(payload: TranslateRequest):
     """Streams live Markdown translation and returns complete report structure at the end."""
     logger.info(f"Received /translate-stream request: target_language='{payload.target_language}'")
-    #print(f"DEBUG: received /translate-stream request: target_language='{payload.target_language}', text: {payload.text}", flush=True) 
     
     async def event_generator():
         accumulated_translation = ""
@@ -199,24 +198,20 @@ async def translate_and_stream(payload: TranslateRequest):
                 "data": json.dumps({
                     "step": "translating", 
                     "message": f"Tłumaczenie raportu na język: {payload.target_language}...",
-                    "reset_stream": True  # 👈 Informuje frontend, by wyczyścił angielski tekst
+                    "reset_stream": True
                 })
             }
 
             # 2. Strumieniujemy tokeny tłumaczenia
             async for token in rag_engine.stream_translation(payload.text, payload.target_language):
-                # Upewniamy się, że token jest czystym stringiem
                 clean_token = token if isinstance(token, str) else str(token)
                 accumulated_translation += clean_token
-                # --- DODAJ TE LOGI ---
-                #print(f"DEBUG CHUNK TYPE: {type(token)}", flush=True)
-                #print(f"DEBUG CHUNK REPR: {repr(token)}", flush=True)
                 yield {
                     "event": "token",
                     "data": json.dumps({"token": clean_token})
                 }
 
-            # 3. Emitujemy pełny zdarzenie 'report' z nową treścią i starymi metadanymi
+            # 3. Emitujemy pełne zdarzenie 'report'
             yield {
                 "event": "report",
                 "data": json.dumps({
@@ -234,12 +229,16 @@ async def translate_and_stream(payload: TranslateRequest):
             }
 
         except Exception as stream_err:
-            logger.error(f"Translation SSE Error: {str(stream_err)}", exc_info=True)
+            err_str = str(stream_err)
+            logger.error(f"Translation SSE Error: {err_str}", exc_info=True)
+            
+            is_quota = "QUOTA_EXHAUSTED" in err_str or "429" in err_str
             yield {
                 "event": "error",
                 "data": json.dumps({
-                    "message": "Wystąpił błąd podczas tłumaczenia.",
-                    "detail": str(stream_err)
+                    "error_type": "QUOTA_EXHAUSTED" if is_quota else "TRANSLATION_ERROR",
+                    "message": "Limit zapytań API został wyczerpany. Spróbuj ponownie za chwilę." if is_quota else "Wystąpił błąd podczas tłumaczenia.",
+                    "detail": err_str
                 })
             }
 
