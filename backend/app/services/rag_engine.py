@@ -7,27 +7,32 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.config import settings
 from app.graph.state import JudgeEvaluation
+from app.services.quota_service import quota_service
+from app.services.llm_service import safe_llm_invoke
 
 logger = logging.getLogger(__name__)
 
 
 class RAGEngine:
     def __init__(self):
+        self.map_model_name = settings.MAP_MODEL
+        self.reduce_model_name = settings.REDUCE_MODEL
+
         self.map_llm = ChatGoogleGenerativeAI(
-            model=settings.MAP_MODEL,
+            model=self.map_model_name,
             google_api_key=settings.GOOGLE_API_KEY,
             temperature=0.0,
             model_kwargs={"service_tier": "flex"}
         )
         self.reduce_llm = ChatGoogleGenerativeAI(
-            model=settings.REDUCE_MODEL,
+            model=self.reduce_model_name,
             google_api_key=settings.GOOGLE_API_KEY,
             temperature=0.1,
             streaming=True,
             model_kwargs={"service_tier": "flex"}
         )
         self.judge_llm = ChatGoogleGenerativeAI(
-            model=settings.REDUCE_MODEL,
+            model=self.reduce_model_name,
             google_api_key=settings.GOOGLE_API_KEY,
             temperature=0.0,
             model_kwargs={"service_tier": "flex"}
@@ -47,7 +52,6 @@ class RAGEngine:
         )
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
 
-
     def get_reduce_messages(
         self, 
         context_blocks: List[Union[str, Dict[str, Any]]], 
@@ -56,8 +60,6 @@ class RAGEngine:
         verification_errors: Optional[List[str]] = None,
         judge_feedback: Optional[str] = None
     ) -> List[Any]:
-    
-        # 1. Normalizacja i bezpieczne konwertowanie bloków na ciągi znaków (str)
         formatted_blocks = []
         for block in context_blocks:
             if isinstance(block, str):
@@ -76,7 +78,6 @@ class RAGEngine:
 
         full_context = "\n\n---\n\n".join(formatted_blocks)
     
-        # 2. Tworzenie promptu korygującego (Feedback/Retry)
         feedback_prompt = ""
         if retry_count > 0 and (verification_errors or judge_feedback):
             feedback_prompt = f"""
@@ -105,33 +106,17 @@ class RAGEngine:
     
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
 
-    def get_judge_messages(self, papers_data: Dict[str, Any], report_markdown: str) -> List[Any]:
-        system_prompt = (
-            "You are a strict academic verifier. Verify if the generated synthesis report is fully grounded "
-            "in the provided source paper analyses."
-        )
-        user_prompt = f"""
-SOURCE DATA:
-{json.dumps(papers_data, indent=2)}
-
-GENERATED REPORT:
-{report_markdown}
-
-Verify if:
-1. Every claim cited with [arXiv:ID] is accurately supported by that specific paper's source data.
-2. No hallucinated benchmarks, metrics, or non-existent authors/papers are introduced.
-"""
-        return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+    # --- BEZPIECZNE METODY ZINTEGROWANE Z QUOTĄ ---
 
     async def run_map_llm(self, messages: List[Any]) -> str:
-        response = await self.map_llm.ainvoke(messages)
+        response = await safe_llm_invoke(self.map_model_name, self.map_llm, messages)
         content = response.content
         if isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict):
             return content[0].get("text", str(content))
         return str(content)
 
     async def run_reduce_llm(self, messages: List[Any]) -> str:
-        response = await self.reduce_llm.ainvoke(messages)
+        response = await safe_llm_invoke(self.reduce_model_name, self.reduce_llm, messages)
         content = response.content
         if isinstance(content, list):
             return "".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in content])
@@ -140,16 +125,12 @@ Verify if:
     async def run_judge_llm(self, messages: List[Any]) -> JudgeEvaluation:
         try:
             structured_judge = self.judge_llm.with_structured_output(JudgeEvaluation)
-            result: JudgeEvaluation = await structured_judge.ainvoke(messages)
-            return result
+            return await safe_llm_invoke(self.reduce_model_name, structured_judge, messages)
         except Exception as e:
             logger.warning(f"Judge evaluation failed: {e}")
             return JudgeEvaluation(is_grounded=True, errors=[])
 
-    # --- NOWE METODY OBSŁUGUJĄCE API/SSE ---
-
     async def run_map_stage_parallel(self, articles_data: List[Dict[str, Any]], user_instruction: str) -> List[str]:
-        """Uruchamia etap MAP równolegle dla listy artykułów."""
         async def process_article(art: Dict[str, Any]) -> str:
             messages = self.get_map_messages(
                 title=art.get("title", ""),
@@ -162,18 +143,38 @@ Verify if:
 
         return await asyncio.gather(*[process_article(art) for art in articles_data])
 
+    # --- STRUMIENIOWANIE Z PEŁNĄ OBSŁUGĄ QUOTY ---
+
     async def stream_reduce_stage(self, map_summaries: List[str], user_instruction: str) -> AsyncGenerator[str, None]:
-        """Strumieniuje generowanie raportu końcowego w etapie REDUCE."""
+        is_ok, msg = await quota_service.check_availability(self.reduce_model_name)
+        if not is_ok:
+            raise RuntimeError(f"Limit Gemini zablokowany: {msg}")
+
         messages = self.get_reduce_messages(
             context_blocks=map_summaries,
             user_instruction=user_instruction
         )
-        async for chunk in self.reduce_llm.astream(messages):
-            if chunk.content:
-                yield str(chunk.content)
+        
+        total_tokens_approx = 0
+        try:
+            async for chunk in self.reduce_llm.astream(messages):
+                if chunk.content:
+                    text_chunk = str(chunk.content)
+                    total_tokens_approx += len(text_chunk.split())
+                    yield text_chunk
+        finally:
+            # Rejestracja zużycia w Redis po zakończeniu lub przerwaniu strumienia
+            await quota_service.record_successful_call(
+                self.reduce_model_name, 
+                input_tokens=len(str(messages).split()), 
+                output_tokens=total_tokens_approx
+            )
 
     async def stream_translation(self, markdown_text: str, target_language: str) -> AsyncGenerator[str, None]:
-        """Strumieniuje tłumaczenie raportu Markdown na podany język docelowy."""
+        is_ok, msg = await quota_service.check_availability(self.reduce_model_name)
+        if not is_ok:
+            raise RuntimeError(f"Limit Gemini zablokowany: {msg}")
+
         system_prompt = (
             f"You are a professional scientific translator. Translate the provided Markdown report into {target_language}.\n"
             "CRITICAL RULES:\n"
@@ -182,27 +183,63 @@ Verify if:
             "3. Keep technical terms accurate and natural in {target_language}."
         )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=markdown_text)]
+        
+        total_tokens_approx = 0
         try:
             async for chunk in self.reduce_llm.astream(messages):
                 content = chunk.content
                 if not content:
                     continue
-            
-                # Jeśli content jest zwykłym stringiem (np. OpenAI)
+                
                 if isinstance(content, str):
+                    total_tokens_approx += len(content.split())
                     yield content
-            
-                # Jeśli content jest listą bloków (np. Anthropic / Claude)
                 elif isinstance(content, list):
                     for block in content:
-                        if isinstance(block, str):
-                            yield block
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            yield block.get("text", "")
+                        text = block if isinstance(block, str) else (block.get("text", "") if isinstance(block, dict) else "")
+                        if text:
+                            total_tokens_approx += len(text.split())
+                            yield text
+        finally:
+            await quota_service.record_successful_call(
+                self.reduce_model_name,
+                input_tokens=len(markdown_text.split()),
+                output_tokens=total_tokens_approx
+            )
+
+    def get_model_for_mode(self, mode_key: str = "fast", temperature: float = 0.1) -> tuple[ChatGoogleGenerativeAI, str]:
+        """Tworzy instancję ChatGoogleGenerativeAI skonfigurowaną pod dany tryb prędkości."""
+        mode_config = settings.SPEED_MODES.get(mode_key, settings.SPEED_MODES.get("fast", {}))
+        model_name = mode_config.get("model_name", settings.MAP_MODEL)
+        service_tier = mode_config.get("service_tier", "flex")
+
+        llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=settings.GOOGLE_API_KEY,
+            temperature=temperature,
+            model_kwargs={"service_tier": service_tier}
+        )
+        return llm, model_name
+
+    async def expand_keywords(self, user_instruction: str, mode_key: str = "fast") -> List[str]:
+        """Generuje synonimy i słowa kluczowe przy użyciu LLM dla podanego trybu."""
+        prompt = f"""
+Given the following research query, extract key concepts and generate 3-5 relevant scientific synonyms, technical acronyms, or related terms used in arXiv papers.
+
+Query: "{user_instruction}"
+"""
+        try:
+            llm, model_name = self.get_model_for_mode(mode_key, temperature=0.0)
+            structured_llm = llm.with_structured_output(QueryExpansionResponse)
+            result = await safe_llm_invoke(model_name, structured_llm, prompt)
+            
+            if result and getattr(result, "keywords", None):
+                logger.info(f"🧠 [QUERY EXPANSION] Wygenerowane synonimy/klucze: {result.keywords}")
+                return list(set(result.keywords))
 
         except Exception as e:
-            import logging
-            logging.error(f"Błąd podczas strumieniowania tłumaczenia: {e}", exc_info=True)
-            raise e
+            logger.warning(f"⚠️ [QUERY EXPANSION] Błąd generowania synonimów ({e}), używam oryginalnego zapytania.")
+
+        return [user_instruction]
 
 rag_engine = RAGEngine()

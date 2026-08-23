@@ -25,6 +25,7 @@ from app.services.pdf_service import PDFService, clean_arxiv_id
 from app.models.schemas import QueryExpansionResponse, SynthesisResponse
 from app.services.quota_service import quota_service
 from app.services.debug_service import debug_service
+from app.services.rag_engine import rag_engine
 
 # --- WYJĄTKI ZE STAREGO / KLASYCZNEGO API CORE ---
 from google.api_core.exceptions import (
@@ -105,39 +106,6 @@ async def safe_llm_invoke(model_name: str, model_or_structured: Any, prompt: Any
 
 
 # --- POMOCNICZE FUNKCJE HELPEROWE ---
-
-def get_model_for_mode(mode_key: str, temperature: float = 0.1) -> tuple[ChatGoogleGenerativeAI, str]:
-    mode_config = settings.SPEED_MODES.get(mode_key, settings.SPEED_MODES.get("fast", {}))
-    model_name = mode_config.get("model_name", settings.MAP_MODEL)
-    service_tier = mode_config.get("service_tier", "flex")
-
-    llm = ChatGoogleGenerativeAI(
-        model=model_name,
-        temperature=temperature,
-        model_kwargs={"service_tier": service_tier}
-    )
-    return llm, model_name
-
-
-async def expand_keywords_with_llm(user_instruction: str, mode_key: str = "fast") -> List[str]:
-    prompt = f"""
-Given the following research query, extract key concepts and generate 3-5 relevant scientific synonyms, technical acronyms, or related terms used in arXiv papers.
-
-Query: "{user_instruction}"
-"""
-    try:
-        llm, model_name = get_model_for_mode(mode_key, temperature=0.0)
-        structured_llm = llm.with_structured_output(QueryExpansionResponse)
-        result = await safe_llm_invoke(model_name, structured_llm, prompt)
-        
-        if result and getattr(result, "keywords", None):
-            logger.info(f"🧠 [QUERY EXPANSION] Wygenerowane synonimy/klucze: {result.keywords}")
-            return list(set(result.keywords))
-
-    except Exception as e:
-        logger.warning(f"⚠️ [QUERY EXPANSION] Błąd generowania synonimów ({e}), używam oryginalnego zapytania.")
-
-    return [user_instruction]
 
 
 def build_xml_grounded_context(
@@ -288,7 +256,7 @@ CRITICAL CITATION EVALUATION RULES:
 async def expand_query_node(state: MultiPaperState):
     logger.info("🧠 [0. QUERY EXPANSION] Generowanie synonimów naukowych...")
     user_mode = state.get("mode", "fast")
-    keywords = await expand_keywords_with_llm(state.get("user_instruction", ""), mode_key=user_mode)
+    keywords = await rag_engine.expand_keywords_with_llm(state.get("user_instruction", ""), mode_key=user_mode)
     return {"expanded_keywords": keywords}
 
 
@@ -357,7 +325,7 @@ async def generate_synthesis_node(state: MultiPaperState):
 
     user_mode = state.get("mode", "fast")
     temp = 0.1 if current_attempt == 1 else 0.0
-    llm, model_name = get_model_for_mode(user_mode, temperature=temp)
+    llm, model_name = rag_engine.get_model_for_mode(user_mode, temperature=temp)
 
     # Wymuszenie ustrukturyzowanej odpowiedzi z Pydantic
     structured_llm = llm.with_structured_output(SynthesisResponse)
@@ -432,7 +400,7 @@ async def llm_judge_node(state: MultiPaperState):
     logger.info("⚖️ [4. LLM JUDGE] Ocena semantyczna (Structured Output)...")
 
     user_mode = state.get("mode", "fast")
-    base_judge, model_name = get_model_for_mode(user_mode, temperature=0.0)
+    base_judge, model_name = rag_engine.get_model_for_mode(user_mode, temperature=0.0)
     structured_judge = base_judge.with_structured_output(JudgeEvaluation)
 
     combined_context = await get_prepared_context(state)
