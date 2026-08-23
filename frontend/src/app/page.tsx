@@ -1,12 +1,14 @@
-// /frontend/src/app/page.tsx
+// src/app/page.tsx
 'use client';
 
-import React, { useState, useRef } from 'react';
-import { ArticleMetadata, StreamStatus } from '@/types';
-import { searchArticles, runGroundedAnalysisStream, translateReportStream } from '@/lib/api';
+import React, { useState, useRef, useEffect } from 'react';
+import { ArticleMetadata, StreamStatus, StatusResponse } from '@/types';
+import { searchArticles, runGroundedAnalysisStream, translateReportStream, getSystemStatus } from '@/lib/api';
 import { ArticleCard } from '@/components/ArticleCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ReportViewer } from '@/components/ReportViewer';
+import { ServiceBadge } from '@/components/ServiceBadge';
+import { QuotaStatusBar } from '@/components/QuotaStatusBar';
 import { About } from '@/components/About';
 import {
   Search,
@@ -55,6 +57,30 @@ export default function Home() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Quota & Status
+  const [quotaStatus, setQuotaStatus] = useState<StatusResponse | null>(null);
+  const [isStatusLoading, setIsStatusLoading] = useState(false);
+  const [isBackendOffline, setIsBackendOffline] = useState(false);
+
+  const fetchStatus = async () => {
+    try {
+      setIsStatusLoading(true);
+      setIsBackendOffline(false);
+      const data = await getSystemStatus();
+      setQuotaStatus(data);
+    } catch (err: unknown) {
+      console.warn('Błąd pobierania statusu systemu:', err);
+      setIsBackendOffline(true);
+      setQuotaStatus(null);
+    } finally {
+      setIsStatusLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+  }, []);
+
   const handleSearch = async (e?: React.SyntheticEvent) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -73,6 +99,7 @@ export default function Home() {
     } finally {
       setIsSearching(false);
     }
+    await fetchStatus();
   };
 
   const toggleArticleSelection = (article: ArticleMetadata) => {
@@ -144,6 +171,7 @@ export default function Home() {
         setStreamError(err.message || 'An error occurred during analysis.');
       }
     }
+    await fetchStatus();
   };
 
   const handleTranslate = async () => {
@@ -202,7 +230,12 @@ export default function Home() {
         setStreamError(err.message || 'An error occurred during translation.');
       }
     }
+    await fetchStatus();
   };
+
+  // Warunki dostępności
+  const isSearchAvailable = !isBackendOffline && (quotaStatus?.modes?.fast?.available ?? true);
+  const isAnalysisAvailable = !isBackendOffline && (quotaStatus?.modes?.[analysisMode]?.available ?? true);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-16">
@@ -214,7 +247,10 @@ export default function Home() {
               <GraduationCap className="h-6 w-6" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-none">LazyProf AI</h1>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-lg font-bold text-slate-900 leading-none">LazyProf AI</h1>
+                <ServiceBadge quotaStatus={quotaStatus} isBackendOffline={isBackendOffline} />
+              </div>
               <p className="text-xs text-slate-500 mt-0.5">Multi-Paper arXiv Synthesis & Grounded RAG</p>
             </div>
           </div>
@@ -266,7 +302,27 @@ export default function Home() {
       </header>
 
       {/* MAIN CONTENT CONTAINER */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* BANER INFORMACYJNY JEŚLI BACKEND OFFLINE */}
+        {isBackendOffline && (
+          <div className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-800 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse" />
+              <p className="text-xs sm:text-sm font-medium text-rose-900">
+                Service temporarily unavailable — please try later.
+              </p>
+            </div>
+
+            <button
+              onClick={fetchStatus}
+              disabled={isStatusLoading}
+              className="rounded-lg bg-rose-100 hover:bg-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-900 transition disabled:opacity-50"
+            >
+              {isStatusLoading ? 'Retrying...' : 'Retry'}
+            </button>
+          </div>
+        )}
+
         {/* TAB 1: SEARCH */}
         {activeTab === 'search' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -296,10 +352,14 @@ export default function Home() {
                     </select>
                     <button
                       type="submit"
-                      disabled={isSearching}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                      disabled={isSearching || !isSearchAvailable}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      {isSearching ? 'Searching...' : 'Search'}
+                      {isSearching
+                        ? 'Searching...'
+                        : !isSearchAvailable
+                        ? 'Unavailable'
+                        : 'Search'}
                     </button>
                   </div>
                 </form>
@@ -417,10 +477,11 @@ export default function Home() {
 
                     <button
                       onClick={handleStartAnalysis}
-                      disabled={isAnalyzing || isTranslating}
-                      className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                      disabled={isAnalyzing || isTranslating || !isAnalysisAvailable}
+                      className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      <Sparkles className="h-4 w-4" /> Generate Report
+                      <Sparkles className="h-4 w-4" />
+                      {!isAnalysisAvailable ? `Unavailable (${analysisMode})` : 'Generate Report'}
                     </button>
                   </div>
 
@@ -438,14 +499,9 @@ export default function Home() {
                             : 'border-slate-200 hover:border-slate-300 bg-white'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full mb-1">
-                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <Zap className="h-3.5 w-3.5 text-amber-500" /> Fast Mode
-                          </span>
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
-                            flash-lite
-                          </span>
-                        </div>
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5 mb-1">
+                          <Zap className="h-3.5 w-3.5 text-amber-500" /> Fast Mode
+                        </span>
                         <p className="text-[11px] text-slate-500">
                           Smart chunks extraction, low reasoning depth. Best for quick overviews.
                         </p>
@@ -460,14 +516,9 @@ export default function Home() {
                             : 'border-slate-200 hover:border-slate-300 bg-white'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full mb-1">
-                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <Cpu className="h-3.5 w-3.5 text-indigo-500" /> Medium Mode
-                          </span>
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
-                            flash-lite + thinking
-                          </span>
-                        </div>
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5 mb-1">
+                          <Cpu className="h-3.5 w-3.5 text-indigo-500" /> Medium Mode
+                        </span>
                         <p className="text-[11px] text-slate-500">
                           Smart chunks with balanced thinking level. High accuracy vs speed ratio.
                         </p>
@@ -482,14 +533,9 @@ export default function Home() {
                             : 'border-slate-200 hover:border-slate-300 bg-white'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full mb-1">
-                          <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <BrainCircuit className="h-3.5 w-3.5 text-purple-600" /> High Depth Mode
-                          </span>
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
-                            gemini-3.5-flash
-                          </span>
-                        </div>
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5 mb-1">
+                          <BrainCircuit className="h-3.5 w-3.5 text-purple-600" /> High Depth Mode
+                        </span>
                         <p className="text-[11px] text-slate-500">
                           Full paper context, maximum thinking level. Detailed cross-citation analysis.
                         </p>
@@ -532,8 +578,17 @@ export default function Home() {
           </div>
         )}
 
-        {/* TAB 3: ABOUT (Komponent wyizolowany) */}
-        {activeTab === 'about' && <About />}
+        {/* TAB 3: ABOUT (Z dołączonym QuotaStatusBar na dole) */}
+        {activeTab === 'about' && (
+          <div className="space-y-6">
+            <About />
+            <QuotaStatusBar
+              modes={quotaStatus?.modes}
+              onRefresh={fetchStatus}
+              isLoading={isStatusLoading}
+            />
+          </div>
+        )}
       </main>
     </div>
   );

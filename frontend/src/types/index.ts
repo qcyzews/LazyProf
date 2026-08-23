@@ -27,3 +27,22 @@ export interface MultiPaperGroundedRequest {
   user_instruction: string;
   mode?: AnalysisMode;
 }
+
+// --- INTERFEJSY STATUSU QUOTY ---
+
+export interface ModeStatus {
+  available: boolean;
+  model_name: string;
+  remaining_rpd: number;
+  max_rpd: number;
+}
+
+export interface StatusResponse {
+  status: string;
+  modes: {
+    fast?: ModeStatus;
+    medium?: ModeStatus;
+    high?: ModeStatus;
+    [key: string]: ModeStatus | undefined;
+  };
+}

@@ -1,6 +1,6 @@
 // /frontend/src/lib/api.ts
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { ArticleMetadata, StreamStatus, SearchResponse } from '@/types';
+import { ArticleMetadata, StreamStatus, SearchResponse, ModeStatus, StatusResponse } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
@@ -45,6 +45,8 @@ export interface TranslatePayload {
   is_valid?: boolean;
 }
 
+
+
 // --- METODY REST ---
 
 /**
@@ -87,6 +89,23 @@ export async function runGroundedAnalysis(
     throw new Error(
       errorData.detail || errorData.message || `Błąd API (${response.status}): ${response.statusText}`
     );
+  }
+
+  return response.json();
+}
+
+/**
+ * Pobiera ogólny status systemu oraz limity RPD dla poszczególnych trybów.
+ */
+export async function getSystemStatus(): Promise<StatusResponse> {
+  const response = await fetch(`${API_BASE_URL}/status`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Nie udało się pobrać statusu systemu.');
   }
 
   return response.json();
