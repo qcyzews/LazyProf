@@ -22,7 +22,7 @@ class SearchService:
 
         # 1. Rozszerzenie słów kluczowych przez LLM
         try:
-            expanded_keywords = await rag_engine.expand_keywords_with_llm(query, mode_key=user_mode)
+            expanded_keywords = await rag_engine.expand_keywords(query, mode_key=user_mode)
             # Jeśli funkcja zwroci listę słów kluczowych, łączymy je w zapytanie or
             if isinstance(expanded_keywords, list):
                 search_query = " OR ".join([f'"{kw}"' for kw in expanded_keywords])
