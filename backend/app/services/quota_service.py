@@ -1,4 +1,5 @@
 # /backend/app/services/quota_service.py
+import asyncio
 from datetime import datetime, timezone
 import logging
 from typing import Dict, Any, Tuple
@@ -13,6 +14,32 @@ except ImportError:
     redis = None
 
 
+class LoopAwareLimiters:
+    """Słownik tworzący instancje AsyncLimiter powiązane z bieżącą pętlą zdarzeń."""
+    def __init__(self, limits: Dict[str, Dict[str, Any]]):
+        self._limits = limits
+        # Klucz: (model_name, loop_id) -> AsyncLimiter
+        self._pool: Dict[Tuple[str, int], AsyncLimiter] = {}
+
+    def get(self, model_name: str, default=None) -> AsyncLimiter | None:
+        if model_name not in self._limits:
+            return default
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return default
+
+        key = (model_name, id(loop))
+        if key not in self._pool:
+            safe_rpm = max(1, self._limits[model_name].get("rpm", 5) - 1)
+            self._pool[key] = AsyncLimiter(max_rate=safe_rpm, time_period=60)
+        return self._pool[key]
+
+    def __getitem__(self, model_name: str) -> AsyncLimiter:
+        limiter = self.get(model_name)
+        if limiter is None:
+            raise KeyError(model_name)
+        return limiter
 class QuotaService:
     _instance = None
 
@@ -30,10 +57,7 @@ class QuotaService:
         self.limits = settings.MODEL_LIMITS
         
         # Lokalne limitery RPM jako fallback/in-memory
-        self.limiters: Dict[str, AsyncLimiter] = {}
-        for model_name, limits in self.limits.items():
-            safe_rpm = max(1, limits.get("rpm", 5) - 1)
-            self.limiters[model_name] = AsyncLimiter(max_rate=safe_rpm, time_period=60)
+        self.limiters = LoopAwareLimiters(self.limits)
 
         self._in_memory_tracker: Dict[str, Dict[str, Any]] = {}
         self._redis_client = None
