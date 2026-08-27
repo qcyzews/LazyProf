@@ -84,6 +84,11 @@ class Settings(BaseSettings):
         }
     }
 
+    # --- KONFIGURACJA LIMITÓW DLA ARXIV ---
+    ARXIV_REQUEST_INTERVAL_SECONDS: float = 3.0  # Wymóg arXiv: 1 request / 3 sekundy
+    ARXIV_USER_AGENT: str = "LazyProf/1.0 (Academic Research Assistant; contact@lazyprof.app)"
+    ARXIV_TIMEOUT_SECONDS: float = 15.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
