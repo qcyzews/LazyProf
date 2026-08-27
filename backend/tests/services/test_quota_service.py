@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.quota_service import QuotaService
-
+from app.core.config import settings
 
 @pytest.fixture(autouse=True)
 def reset_quota_singleton():
@@ -25,12 +25,16 @@ def test_quota_service_init_missing_redis_import_raises_error():
 
 
 def test_quota_service_init_redis_backend_success():
+    # Czyścimy instancję Singletona na potrzeby testu
+    QuotaService._instance = None
+    
     mock_redis = MagicMock()
     with patch("app.services.quota_service.redis", mock_redis):
         with patch("app.core.config.settings.QUOTA_BACKEND", "redis"):
             service = QuotaService()
             assert service.backend_type == "redis"
-            mock_redis.from_url.assert_called_once()
+            # Sprawdzamy nowe wywołanie ConnectionPool zamiast starego from_url
+            mock_redis.ConnectionPool.from_url.assert_called_once()
 
 
 def test_quota_service_init_memory_backend():
@@ -93,6 +97,7 @@ async def test_check_availability_memory_rpd_exceeded():
 
 @pytest.mark.asyncio
 async def test_check_availability_redis_success():
+    QuotaService._instance = None
     service = QuotaService()
     service.backend_type = "redis"
 
@@ -100,6 +105,9 @@ async def test_check_availability_redis_success():
     mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
     mock_pipe.__aexit__ = AsyncMock(return_value=None)
     mock_pipe.execute = AsyncMock(return_value=["1", "500", "5"])
+    
+    # Jawnie definiujemy synchroniczne wywołanie get
+    mock_pipe.get = MagicMock()
 
     mock_redis = MagicMock()
     mock_redis.pipeline.return_value = mock_pipe
@@ -172,14 +180,27 @@ async def test_get_available_modes_status_memory_backend():
 
 @pytest.mark.asyncio
 async def test_get_available_modes_status_redis_backend():
+    QuotaService._instance = None
     service = QuotaService()
     service.backend_type = "redis"
 
+    num_modes = len(settings.SPEED_MODES)
+
+    # Tworzymy mock dla pipeline
+    mock_pipe = MagicMock()
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_pipe.execute = AsyncMock(return_value=["3"] * num_modes)
+    
+    # pipe.get jest synchroniczne w pipeline Redisa!
+    mock_pipe.get = MagicMock()
+
     mock_redis = MagicMock()
-    mock_redis.get = AsyncMock(return_value="3")
+    mock_redis.pipeline.return_value = mock_pipe
     service._redis_client = mock_redis
 
     status = await service.get_available_modes_status()
+    
     assert isinstance(status, dict)
     assert len(status) > 0
     for mode_data in status.values():

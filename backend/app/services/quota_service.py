@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any, Tuple
 from aiolimiter import AsyncLimiter
 from app.core.config import settings
+from redis.exceptions import RedisError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -66,7 +67,16 @@ class QuotaService:
             if redis is None:
                 raise ImportError("Brak pakietu 'redis'. Zainstaluj go: pip install redis")
             logger.info(f"🔌 [QUOTA SERVICE] Inicjalizacja połączenia Redis ({settings.REDIS_URL})...")
-            self._redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+            pool = redis.ConnectionPool.from_url(
+                settings.REDIS_URL,
+                decode_responses=True,
+                max_connections=50,          # Obsługa do 50 równoległych połączeń
+                socket_connect_timeout=5.0,  # 5s na ustanowienie połączenia TCP
+                socket_timeout=5.0,          # 5s na odpowiedź
+                health_check_interval=30
+            )
+            self._redis_client = redis.Redis(connection_pool=pool)
+            #self._redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
         else:
             logger.info("🧠 [QUOTA SERVICE] Używanie trybu pamięciowego (in_memory).")
 
@@ -144,16 +154,25 @@ class QuotaService:
         W przypadku braku połączenia z Redisem zwraca bezpieczny brak dostępności (Fail-Closed).
         """
         modes_status = {}
+        modes = list(settings.SPEED_MODES.items())
 
-        for mode_key, mode_cfg in settings.SPEED_MODES.items():
-            model_name = mode_cfg.get("model_name")
-            limits = settings.MODEL_LIMITS.get(model_name, {"rpd": 20, "rpm": 5, "tpm": 250_000})
-            max_rpd = limits.get("rpd", 20)
-            _, _, rpd_key = self._get_time_keys(model_name)
+        if self.backend_type == "redis" and self._redis_client:
+            try:
+                # Wykonanie zbiorczego zapytania PIPELINE zamiast zapytań w pętli
+                async with self._redis_client.pipeline(transaction=False) as pipe:
+                    for _, mode_cfg in modes:
+                        model_name = mode_cfg.get("model_name")
+                        _, _, rpd_key = self._get_time_keys(model_name)
+                        pipe.get(rpd_key)
+                    
+                    results = await pipe.execute()
 
-            if self.backend_type == "redis" and self._redis_client:
-                try:
-                    val = await self._redis_client.get(rpd_key)
+                for idx, (mode_key, mode_cfg) in enumerate(modes):
+                    model_name = mode_cfg.get("model_name")
+                    limits = settings.MODEL_LIMITS.get(model_name, {"rpd": 20, "rpm": 5, "tpm": 250_000})
+                    max_rpd = limits.get("rpd", 20)
+                    
+                    val = results[idx]
                     current_count = int(val) if val else 0
                     is_available = current_count < max_rpd
 
@@ -166,23 +185,30 @@ class QuotaService:
                         "status_code": "ok"
                     }
 
-                except RedisError as e:
-                    # Brak pewności co do stanu limitów -> Odrzucamy dostępność (Fail-Closed)
-                    logger.error(f"❌ [QuotaService] Błąd połączenia z Redisem dla {mode_key}: {e}")
+            except RedisError as e:
+                logger.error(f"❌ [QuotaService] Błąd połączenia z Redisem w statusie: {e}")
+                for mode_key, mode_cfg in modes:
+                    model_name = mode_cfg.get("model_name")
+                    limits = settings.MODEL_LIMITS.get(model_name, {"rpd": 20})
                     modes_status[mode_key] = {
                         "available": False,
                         "model_name": model_name,
                         "remaining_rpd": 0,
-                        "max_rpd": max_rpd,
+                        "max_rpd": limits.get("rpd", 20),
                         "current_rpd_usage": 0,
                         "status_code": "service_unavailable",
                         "error_message": "Nie można zweryfikować limitów usługi."
                     }
-            else:
+        else:
+            for mode_key, mode_cfg in modes:
+                model_name = mode_cfg.get("model_name")
+                limits = settings.MODEL_LIMITS.get(model_name, {"rpd": 20})
+                max_rpd = limits.get("rpd", 20)
+                _, _, rpd_key = self._get_time_keys(model_name)
+                
                 current_count = self._in_memory_tracker.get(rpd_key, 0)
-                is_available = current_count < max_rpd
                 modes_status[mode_key] = {
-                    "available": is_available,
+                    "available": current_count < max_rpd,
                     "model_name": model_name,
                     "remaining_rpd": max(0, max_rpd - current_count),
                     "max_rpd": max_rpd,
