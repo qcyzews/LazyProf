@@ -139,7 +139,10 @@ class QuotaService:
             self._in_memory_tracker[rpd_key] = self._in_memory_tracker.get(rpd_key, 0) + 1
 
     async def get_available_modes_status(self) -> Dict[str, Any]:
-        """Zwraca status dostępności trybów dla API / frontendu."""
+        """
+        Zwraca status dostępności trybów dla API / frontendu.
+        W przypadku braku połączenia z Redisem zwraca bezpieczny brak dostępności (Fail-Closed).
+        """
         modes_status = {}
 
         for mode_key, mode_cfg in settings.SPEED_MODES.items():
@@ -149,19 +152,43 @@ class QuotaService:
             _, _, rpd_key = self._get_time_keys(model_name)
 
             if self.backend_type == "redis" and self._redis_client:
-                val = await self._redis_client.get(rpd_key)
-                current_count = int(val) if val else 0
+                try:
+                    val = await self._redis_client.get(rpd_key)
+                    current_count = int(val) if val else 0
+                    is_available = current_count < max_rpd
+
+                    modes_status[mode_key] = {
+                        "available": is_available,
+                        "model_name": model_name,
+                        "remaining_rpd": max(0, max_rpd - current_count),
+                        "max_rpd": max_rpd,
+                        "current_rpd_usage": current_count,
+                        "status_code": "ok"
+                    }
+
+                except RedisError as e:
+                    # Brak pewności co do stanu limitów -> Odrzucamy dostępność (Fail-Closed)
+                    logger.error(f"❌ [QuotaService] Błąd połączenia z Redisem dla {mode_key}: {e}")
+                    modes_status[mode_key] = {
+                        "available": False,
+                        "model_name": model_name,
+                        "remaining_rpd": 0,
+                        "max_rpd": max_rpd,
+                        "current_rpd_usage": 0,
+                        "status_code": "service_unavailable",
+                        "error_message": "Nie można zweryfikować limitów usługi."
+                    }
             else:
                 current_count = self._in_memory_tracker.get(rpd_key, 0)
-
-            is_available = current_count < max_rpd
-            modes_status[mode_key] = {
-                "available": is_available,
-                "model_name": model_name,
-                "remaining_rpd": max(0, max_rpd - current_count),
-                "max_rpd": max_rpd,
-                "current_rpd_usage": current_count
-            }
+                is_available = current_count < max_rpd
+                modes_status[mode_key] = {
+                    "available": is_available,
+                    "model_name": model_name,
+                    "remaining_rpd": max(0, max_rpd - current_count),
+                    "max_rpd": max_rpd,
+                    "current_rpd_usage": current_count,
+                    "status_code": "ok"
+                }
 
         return modes_status
 
