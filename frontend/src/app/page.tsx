@@ -94,7 +94,11 @@ export default function Home() {
       setSearchResults(res?.articles ?? []);
       setExpandedQuery(res?.expanded_query || null);
     } catch (err: any) {
-      setSearchError(err.message || 'Failed to search articles.');
+      setSearchError(
+        typeof err === 'string' 
+          ? err 
+          : err?.message || 'Failed to search articles.'
+      );
       setSearchResults([]);
     } finally {
       setIsSearching(false);

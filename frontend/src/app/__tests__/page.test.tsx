@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
   searchArticles: vi.fn(),
   runGroundedAnalysisStream: vi.fn(),
   translateReportStream: vi.fn(),
+  getSystemStatus: vi.fn(),
 }));
 
 vi.mock('@/components/ArticleCard', () => ({
@@ -62,6 +63,14 @@ describe('Home Page (page.tsx) - Full Branch Coverage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.alert = vi.fn();
+    (api.getSystemStatus as Mock).mockResolvedValue({
+      status: 'ok',
+      modes: {
+        fast: { available: true },
+        medium: { available: true },
+        high: { available: true },
+      },
+    });
   });
 
   it('renders initial view and handles empty search submission', () => {
@@ -345,25 +354,16 @@ describe('Home Page (page.tsx) - Full Branch Coverage', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Select' })[0]);
 
-    // Badging i lista w panelu bocznym (obsługa wielu wystąpień tekstu)
+    // Badging i lista w panelu bocznym
     expect(screen.getByRole('button', { name: /1\.\s*Search Papers\s*1/i })).toBeInTheDocument();
     expect(screen.getAllByText('Retrieval Augmented Generation Overview')).toHaveLength(2);
 
     // 2. Wyczyszczenie zaznaczeń
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
 
-    // 3. Wymuszenie wywołania onClick przycisku mimo zablokowanego stanu
+    // 3. Sprawdzenie przycisku konfiguracyjnego gdy brak wybranych artykułów
     const configBtn = screen.getByRole('button', { name: /Configure & Generate Report/i });
-    
-    // Pobranie wewnętrznego handlera Reacta ze struktury DOM obiektu (__reactProps$...)
-    const reactPropsKey = Object.keys(configBtn).find((key) => key.startsWith('__reactProps$'));
-    if (reactPropsKey && (configBtn as any)[reactPropsKey]?.onClick) {
-      (configBtn as any)[reactPropsKey].onClick({ preventDefault: () => {}, stopPropagation: () => {} });
-    } else {
-      fireEvent.click(configBtn);
-    }
-
-    expect(alertSpy).toHaveBeenCalledWith('Please select at least one paper first.');
+    expect(configBtn).toBeDisabled();
 
     // 4. Przejście do widoku pustego raportu
     fireEvent.click(screen.getByRole('button', { name: /2\. Synthesis Report/i }));
