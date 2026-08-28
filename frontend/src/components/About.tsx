@@ -8,7 +8,9 @@ import {
   Workflow,
   ShieldCheck,
   Cpu,
+  Code2,
 } from 'lucide-react';
+import { SupportBlock } from './SupportBlock';
 
 export function About() {
   return (
@@ -31,6 +33,13 @@ export function About() {
           researchers and engineers to query arXiv, select multiple related papers, extract their full-text PDF
           content, and run comparative cross-paper synthesis backed by verifiable citations and strict anti-hallucination verification loops.
         </p>
+
+        <div className="mt-4 p-3.5 bg-slate-50 rounded-xl border border-slate-200/60 text-xs text-slate-600 flex items-start gap-2.5">
+          <Code2 className="h-4 w-4 text-indigo-500 shrink-0 mt-0.5" />
+          <span>
+            This tool was built as a side project experimenting with practical AI applications that demand <strong>strict factual accuracy, high reliability, and determinism</strong>.
+          </span>
+        </div>
       </div>
 
       {/* Kluczowe filary architektury */}
@@ -110,6 +119,9 @@ export function About() {
           </div>
         </div>
       </div>
+
+      {/* SEKCJA WSPARCIA I FEEDBACKU (Odkomentuj/Zakomentuj w zależności od potrzeb) */}
+      <SupportBlock showBuyMeACoffee={false} />
 
       {/* Tech Stack */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

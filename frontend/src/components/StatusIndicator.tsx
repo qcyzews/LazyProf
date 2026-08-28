@@ -15,35 +15,35 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
       case 'downloading':
         return {
           icon: <Download className="h-4 w-4 text-amber-500 animate-pulse" />,
-          title: 'Pobieranie i przetwarzanie PDF',
+          title: 'Fetching and processing PDF',
           bg: 'bg-amber-50',
           border: 'border-amber-200',
         };
       case 'map':
         return {
           icon: <Cpu className="h-4 w-4 text-blue-500 animate-pulse" />,
-          title: 'Gemini: Analiza częściowa (Map)',
+          title: 'Gemini: Article analysis (Map)',
           bg: 'bg-blue-50',
           border: 'border-blue-200',
         };
       case 'reduce':
         return {
           icon: <Sparkles className="h-4 w-4 text-indigo-500 animate-pulse" />,
-          title: 'Gemini: Synteza i generowanie raportu',
+          title: 'Gemini: Synthesis and report generation',
           bg: 'bg-indigo-50',
           border: 'border-indigo-200',
         };
       case 'translating':
         return {
           icon: <Languages className="h-4 w-4 text-emerald-500 animate-pulse" />,
-          title: 'Tłumaczenie raportu',
+          title: 'Report translation',
           bg: 'bg-emerald-50',
           border: 'border-emerald-200',
         };
       default:
         return {
           icon: <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />,
-          title: 'Przetwarzanie',
+          title: 'Processing',
           bg: 'bg-slate-50',
           border: 'border-slate-200',
         };

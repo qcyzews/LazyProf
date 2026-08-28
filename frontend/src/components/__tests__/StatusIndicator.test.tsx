@@ -17,7 +17,7 @@ describe('StatusIndicator Component', () => {
 
     const { container } = render(<StatusIndicator status={status} />);
 
-    expect(screen.getByText('Pobieranie i przetwarzanie PDF')).toBeInTheDocument();
+    expect(screen.getByText('Fetching and processing PDF')).toBeInTheDocument();
     expect(screen.getByText('Downloading papers...')).toBeInTheDocument();
     expect(container.querySelector('.bg-indigo-600')).not.toBeInTheDocument();
   });
@@ -31,7 +31,7 @@ describe('StatusIndicator Component', () => {
 
     const { container } = render(<StatusIndicator status={status} />);
 
-    expect(screen.getByText('Gemini: Analiza częściowa (Map)')).toBeInTheDocument();
+    expect(screen.getByText('Gemini: Article analysis (Map)')).toBeInTheDocument();
     expect(screen.getByText('Processing paper 1 of 3...')).toBeInTheDocument();
 
     const progressBar = container.querySelector('[style*="width: 33%"]');
@@ -47,7 +47,7 @@ describe('StatusIndicator Component', () => {
 
     render(<StatusIndicator status={status} />);
 
-    expect(screen.getByText('Gemini: Synteza i generowanie raportu')).toBeInTheDocument();
+    expect(screen.getByText('Gemini: Synthesis and report generation')).toBeInTheDocument();
     expect(screen.getByText('Synthesizing report...')).toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe('StatusIndicator Component', () => {
 
     render(<StatusIndicator status={status} />);
 
-    expect(screen.getByText('Tłumaczenie raportu')).toBeInTheDocument();
+    expect(screen.getByText('Report translation')).toBeInTheDocument();
     expect(screen.getByText('Translating into Polish...')).toBeInTheDocument();
   });
 
@@ -72,7 +72,7 @@ describe('StatusIndicator Component', () => {
 
     render(<StatusIndicator status={status} />);
 
-    expect(screen.getByText('Przetwarzanie')).toBeInTheDocument();
+    expect(screen.getByText('Processing')).toBeInTheDocument();
     expect(screen.getByText('Working...')).toBeInTheDocument();
   });
 

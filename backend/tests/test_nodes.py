@@ -256,5 +256,5 @@ async def test_format_final_report_node():
     assert "Główny tekst raportu." in markdown
     assert "Badania nad AI" in markdown
     assert "Jan Kowalski, Anna Nowak" in markdown
-    assert "Raport rzetelności i weryfikacji treści" in markdown
-    assert "Wszystkie zawarte w raporcie tezy" in markdown
+    assert "Content Integrity & Verification Report" in markdown
+    assert "All assertions and page citations" in markdown

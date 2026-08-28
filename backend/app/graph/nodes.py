@@ -398,43 +398,54 @@ async def record_failed_attempt_node(state: MultiPaperState):
 
 
 async def format_final_report_node(state: MultiPaperState):
-    logger.info("📄 [REPORT FORMATTER] Budowanie raportu końcowego (wersja dla użytkownika)...")
+    logger.info("📄 [REPORT FORMATTER] Building final report...")
     logger.info(f"DEBUG: Content length: {len(state.get('analysis_markdown', ''))}")
 
     final_markdown = state.get("analysis_markdown", "")
     metas = state.get("papers_metadata", {})
     audit_trail = state.get("audit_trail", [])
     
-    # Elegancka sekcja bibliograficzna na górze lub na dole
+    # 1. References / Bibliography
     if metas:
-        references_section = "\n\n---\n## 📚 Przeanalizowane dokumenty\n"
+        references_section = "\n\n---\n## 📚 Reviewed Documents\n"
         for aid, meta in metas.items():
             authors_list = meta.get("authors", [])
             authors_formatted = f"{', '.join(authors_list[:3])} et al." if len(authors_list) > 3 else ", ".join(authors_list)
             
             references_section += f"- **[{aid}] {meta.get('title')}**\n"
-            references_section += f"   *Autorzy:* {authors_formatted} | *Data:* {meta.get('published', 'N/A')}\n"
-            references_section += f"   *Link:* [Pobierz PDF]({meta.get('pdf_url')})\n\n"
+            references_section += f"   *Authors:* {authors_formatted} | *Date:* {meta.get('published', 'N/A')}\n"
+            references_section += f"   *Link:* [Download PDF]({meta.get('pdf_url')})\n\n"
         
         final_markdown += references_section
 
-    # Przyjazny komunikat o procesie redakcyjnym (tylko jeśli były poprawki)
+    # 2. Detailed Individual Paper Analyses
+    if metas:
+        detailed_analyses = "\n---\n## 🔍 Detailed Paper Analyses\n"
+        for aid, meta in metas.items():
+            analysis_text = meta.get("summary") or meta.get("individual_analysis", "No detailed analysis available.")
+            
+            detailed_analyses += f"### 📄 [{aid}] {meta.get('title')}\n"
+            detailed_analyses += f"{analysis_text}\n\n"
+        
+        final_markdown += detailed_analyses
+
+    # 3. Audit & Verification Section
     if audit_trail:
         total_attempts = len(audit_trail)
         quality_note = f"""
 ---
-## 🛡️ Raport rzetelności i weryfikacji treści
-> *System AI przeanalizował powyższy tekst pod kątem zgodności z oryginalnymi dokumentami (przeprowadzono {total_attempts} cykle weryfikacji źródeł).*
+## 🛡️ Content Integrity & Verification Report
+> *The AI system analyzed the above text for consistency with the original documents ({total_attempts} source verification cycles performed).*
 """
         
-        # Jeśli osiągnięto limit i wynik może wymagać uwagi
         if not state.get("is_valid", False):
-            quality_note += "\n> ⚠️ *Uwaga: Ponieważ artykuł jest bardzo obszerny, niektóre precyzyjne odnośniki do stron mogły wymagać uogólnienia, aby zapewnić pełną poprawność merytoryczną.*\n"
+            quality_note += "\n> ⚠️ *Note: Due to the extensive size of the document, some exact page references may have been generalized to ensure overall accuracy.*\n"
         else:
-            quality_note += "\n> ✅ *Wszystkie zawarte w raporcie tezy i odnośniki do stron zostały pomyślnie zweryfikowane z oryginalnymi plikami PDF.*\n"
+            quality_note += "\n> ✅ *All assertions and page citations in this report have been successfully verified against original PDFs.*\n"
 
         final_markdown += quality_note
-        logger.info(f"DEBUG: final_markdown length: {len(final_markdown)}")
+
+    logger.info(f"DEBUG: final_markdown length: {len(final_markdown)}")
 
     return {"analysis_markdown": final_markdown}
 
