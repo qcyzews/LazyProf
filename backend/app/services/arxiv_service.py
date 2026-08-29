@@ -10,6 +10,25 @@ from app.services.quota_service import quota_service
 
 logger = logging.getLogger("uvicorn.error")
 
+# Skrypt Lua do atomowego przydzielania slotów czasowych w Redisie
+# Zapobiega wyścigom (Race Condition) przy równoległych zapytaniach
+REDIS_RATE_LIMIT_LUA = """
+local key = KEYS[1]
+local interval = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+
+local last = redis.call('GET', key)
+local last_time = last and tonumber(last) or 0
+
+local scheduled = math.max(now, last_time + interval)
+redis.call('SET', key, scheduled)
+
+-- Ustawiamy TTL klucza, żeby nie wisiał wiecznie w pamięci Redisa
+redis.call('PEXPIRE', key, math.ceil(interval * 2 * 1000))
+
+return tostring(scheduled)
+"""
+
 class ArxivService:
     _last_request_time: float = 0.0
     _local_rate_lock: asyncio.Lock = asyncio.Lock()
@@ -17,42 +36,76 @@ class ArxivService:
     @classmethod
     async def _wait_for_rate_limit(cls):
         """
-        Globalny Rate Limiter.
-        Używa Redisa (Distributed Lock) dla wielu instancji backendu,
-        lub lokalnego asyncio.Lock jeśli backend działa w trybie in_memory.
+        Globalny Rate Limiter z atomową rezerwacją czasu (Token/Slot Bucket).
         """
         redis_client = getattr(quota_service, "_redis_client", None)
 
         if settings.QUOTA_BACKEND == "redis" and redis_client:
-            lock_key = "lock:arxiv_rate_limit"
-            interval_ms = int(settings.ARXIV_REQUEST_INTERVAL_SECONDS * 1000)
+            lock_key = "lock:arxiv_next_slot"
+            interval = settings.ARXIV_REQUEST_INTERVAL_SECONDS
+            now = time.time()
 
-            # Pętla oczekiwania na wolne okienko w Redisie
-            while True:
-                # Atomowy SET z ograniczeniem czasowym (PX) i warunkiem NX (tylko gdy klucz nie istnieje)
-                acquired = await redis_client.set(lock_key, "locked", px=interval_ms, nx=True)
-                if acquired:
-                    logger.debug("🌐 [arXiv RateLimiter (Redis)] Uzyskano dostęp do API arXiv.")
-                    break
-                
-                # Jeśli inna instancja właśnie wysłała zapytanie, czekamy 200ms i sprawdzamy ponownie
-                await asyncio.sleep(0.2)
-        else:
-            # Fallback dla pojedynczej instancji / in_memory
-            async with cls._local_rate_lock:
-                now = time.monotonic()
-                elapsed = now - cls._last_request_time
-                wait_time = settings.ARXIV_REQUEST_INTERVAL_SECONDS - elapsed
+            try:
+                # Atomowe wykonanie skryptu Lua na serwerze Redis
+                scheduled_str = await redis_client.eval(
+                    REDIS_RATE_LIMIT_LUA, 1, lock_key, interval, now
+                )
+                scheduled_time = float(scheduled_str)
+                wait_time = scheduled_time - now
+
                 if wait_time > 0:
-                    logger.debug(f"⏳ [arXiv RateLimiter (Local)] Oczekiwanie {wait_time:.2f}s...")
+                    logger.debug(f"⏳ [arXiv RateLimiter (Redis)] Oczekiwanie {wait_time:.2f}s na slot...")
                     await asyncio.sleep(wait_time)
-                cls._last_request_time = time.monotonic()
+
+            except Exception as e:
+                logger.warning(f"⚠️ [arXiv RateLimiter] Błąd Redisa, fallback do lokalnego: {e}")
+                await cls._fallback_local_wait()
+        else:
+            await cls._fallback_local_wait()
+
+    @classmethod
+    async def _fallback_local_wait(cls):
+        async with cls._local_rate_lock:
+            now = time.monotonic()
+            elapsed = now - cls._last_request_time
+            wait_time = settings.ARXIV_REQUEST_INTERVAL_SECONDS - elapsed
+            if wait_time > 0:
+                logger.debug(f"⏳ [arXiv RateLimiter (Local)] Oczekiwanie {wait_time:.2f}s...")
+                await asyncio.sleep(wait_time)
+            cls._last_request_time = time.monotonic()
 
     @classmethod
     def _get_headers(cls) -> Dict[str, str]:
         return {
             "User-Agent": settings.ARXIV_USER_AGENT
         }
+
+    @classmethod
+    async def fetch_multiple_papers_metadata(cls, arxiv_ids: List[str]) -> List[Dict[str, Any]]:
+        """Zbiorcze pobieranie metadanych (1 request dla całej listy ID)."""
+        if not arxiv_ids:
+            return []
+
+        ids_str = ",".join(arxiv_ids)
+        url = f"https://export.arxiv.org/api/query?id_list={ids_str}"
+        logger.info(f"🌐 [arXiv API] Pobieranie zbiorcze metadanych dla: {ids_str}")
+
+        await cls._wait_for_rate_limit()
+
+        try:
+            async with httpx.AsyncClient(headers=cls._get_headers()) as client:
+                response = await client.get(url, timeout=settings.ARXIV_TIMEOUT_SECONDS)
+                response.raise_for_status()
+
+            root = ET.fromstring(response.text)
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+            entries = root.findall('atom:entry', ns)
+
+            return [cls._parse_entry(entry, ns) for entry in entries]
+
+        except Exception as e:
+            logger.error(f"❌ [arXiv API] Błąd podczas pobierania zbiorczego: {e}")
+            return [cls._fallback_metadata(aid) for aid in arxiv_ids]
 
     @classmethod
     async def fetch_paper_metadata(cls, arxiv_id: str) -> Dict[str, Any]:
@@ -109,8 +162,8 @@ class ArxivService:
 
     @classmethod
     async def download_pdf_bytes(cls, pdf_url: str) -> Optional[bytes]:
-        """Pobiera zawartość PDF z arXiv z uwzględnieniem limitów prędkości."""
-        logger.info(f"📥 [arXiv Download] Pobieranie PDF: {pdf_url}")
+        """Pobiera pojedynczy PDF z uwzględnieniem ścisłej kolejki czasowej."""
+        logger.info(f"📥 [arXiv Download] Rezerwacja slotu dla PDF: {pdf_url}")
         await cls._wait_for_rate_limit()
 
         try:
