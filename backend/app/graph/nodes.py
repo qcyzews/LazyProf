@@ -429,19 +429,37 @@ async def format_final_report_node(state: MultiPaperState):
         
         final_markdown += detailed_analyses
 
-    # 3. Audit & Verification Section
-    if audit_trail:
-        total_attempts = len(audit_trail)
+    # 3. Audit & Verification Section (z wyciąganiem uzasadnienia Sędziego)
+    is_valid = state.get("is_valid", False)
+    
+    # Zabezpieczenie: Wyświetlamy sekcję, jeśli mamy audit_trail LUB bezpośredni stan weryfikacji
+    if audit_trail or "is_valid" in state:
+        total_attempts = len(audit_trail) if audit_trail else 1
+        
+        # Pobieramy ostatni wpis z audytu lub z bezpośrednich pól stanu
+        last_audit = audit_trail[-1] if audit_trail else {}
+        judge_reasoning = (
+            last_audit.get("judge_reasoning") 
+            or state.get("judge_reasoning") 
+            or state.get("judge_feedback") 
+            or "No detailed judge feedback recorded."
+        )
+
         quality_note = f"""
 ---
 ## 🛡️ Content Integrity & Verification Report
 > *The AI system analyzed the above text for consistency with the original documents ({total_attempts} source verification cycles performed).*
+
 """
-        
-        if not state.get("is_valid", False):
-            quality_note += "\n> ⚠️ *Note: Due to the extensive size of the document, some exact page references may have been generalized to ensure overall accuracy.*\n"
+        if is_valid:
+            quality_note += "### Status: ✅ Verified\n"
+            quality_note += "> All assertions and page citations in this report have been successfully verified against original PDFs.\n\n"
         else:
-            quality_note += "\n> ✅ *All assertions and page citations in this report have been successfully verified against original PDFs.*\n"
+            quality_note += "### Status: ⚠️ Partially Verified / Caveats Applied\n"
+            quality_note += "> Due to the extensive size of the document or complex layout, some exact page references may have been generalized.\n\n"
+
+        # Dodajemy szczegółowe uzasadnienie sędziego (Judge's Verdict)
+        quality_note += f"**Judge's Evaluation:**\n> {judge_reasoning}\n"
 
         final_markdown += quality_note
 
