@@ -54,6 +54,10 @@ jobs:
         run: |
           docker build -t lazyprof-backend ./backend
 
+      - name: Ensure Docker Network Exists
+        run: |
+          docker network create backend-net || true
+
       # TWORZENIE PLIKU .ENV Z SEKRETU GITHUBA I URUCHOMIENIE KONTENERA
       - name: Deploy Docker Container with Envs
         env:
@@ -75,6 +79,7 @@ jobs:
           docker run -d \
             --name lazyprof-backend \
             --restart always \
+            --network backend-net \
             --env-file .env \
             -p 127.0.0.1:8000:8000 \
             lazyprof-backend
